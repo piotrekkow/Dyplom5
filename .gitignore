@@ -1,0 +1,13 @@
+.clang-format
+.clangd
+
+/build/
+/.vscode/
+/.cache/
+*.ps1
+*.txt
+!CMakeLists.txt
+*.pdf
+*.md
+*.sh
+*.ts
