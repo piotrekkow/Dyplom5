@@ -2,10 +2,12 @@
 #include <atomic>
 #include <cmath>
 #include <future>
+#include <iostream>
 #include <mutex>
 #include <road_network/demand.hpp>
 #include <road_network/graph.hpp>
 #include <signal_optimizer/optimizer.hpp>
+#include <string>
 #include <unordered_map>
 
 #include "config_generator.hpp"
@@ -326,7 +328,8 @@ std::unordered_map<GId, Sequence> computeSequences(const GConfig& bestCfg,
             }
         }
         SignalSequence seq{g.tMin};
-        static_cast<void>(seq.setIntervals(std::move(ivs))); // NOLINT(bugprone-unused-return-value)
+        static_cast<void>(seq.setIntervals(
+            std::move(ivs)));  // NOLINT(bugprone-unused-return-value)
         sequences[gid] = std::move(seq);
     }
     return sequences;
@@ -377,7 +380,7 @@ std::optional<OptimizeResult> optimize(NodeId node, const Graph& graph,
     if (!rawResult) return std::nullopt;
 
     const GConfig& bestCfg = configs[rawResult->cfgIdx];
-    GCycle best = std::move(rawResult->cycle);
+    const GCycle& best = rawResult->cycle;
 
     auto seqMap = computeSequences(bestCfg, best, cycleLength);
     return compileResult(bestCfg, inp, seqMap);

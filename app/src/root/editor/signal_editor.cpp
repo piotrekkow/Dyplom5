@@ -154,17 +154,17 @@ std::expected<void, TimingWarning> SignalEditor::setMinIntervalLengthTx(
 //  OPTIMIZER TX
 //
 
-std::optional<signal_optimizer::OptimizeResult> SignalEditor::runOptimizerTx(
-    Transaction& tx, NodeId at, int cycleLength) {
+std::optional<TimingId> SignalEditor::runOptimizerTx(Transaction& tx, NodeId at,
+                                                     int cycleLength) {
     auto result = signal_optimizer::optimize(at, graph_, demand_, cycleLength);
     if (!result) return std::nullopt;
 
     removeNodeSignalsTx(tx, at);
 
-    std::vector<SignalGroupId> sg_ids;
+    std::vector<SignalGroupId> sgIds;
     for (const auto& mg : result->mgResults) {
         auto id = addMovementGroupTx(tx, at, mg.clusters, mg.isProtected, 8);
-        sg_ids.push_back(id);
+        sgIds.push_back(id);
     }
 
     for (const auto& cg : result->cgResults) {
@@ -172,20 +172,20 @@ std::optional<signal_optimizer::OptimizeResult> SignalEditor::runOptimizerTx(
         if (const auto* s = std::get_if<SignalSequence>(&cg.sequence))
             intervalMin = s->minIntervalLength();
         auto id = addCrosswalkGroupTx(tx, at, cg.crosswalks, intervalMin);
-        sg_ids.push_back(id);
+        sgIds.push_back(id);
     }
 
-    TimingId timing_id = createTimingTx(tx, at, cycleLength);
+    TimingId timingId = createTimingTx(tx, at, cycleLength);
 
     auto applySequence = [&](SignalGroupId sgId, const Sequence& seq) {
         const auto* s = std::get_if<SignalSequence>(&seq);
         if (!s || s->intervals().empty()) return;
-        auto r = signal_.setIntervals(timing_id, sgId, s->intervals());
+        auto r = signal_.setIntervals(timingId, sgId, s->intervals());
         if (r) {
             tx.recordUndo(std::move(r->undo), bus_.sequenceChanged,
-                          SequenceChanged{timing_id, sgId, at});
+                          SequenceChanged{timingId, sgId, at});
             tx.recordEvent(bus_.sequenceChanged,
-                           SequenceChanged{timing_id, sgId, at});
+                           SequenceChanged{timingId, sgId, at});
             tx.addSolve(SolvePriority::SIGNAL,
                         [this] { signal_.solve(graph_.derived()); });
         }
@@ -193,10 +193,10 @@ std::optional<signal_optimizer::OptimizeResult> SignalEditor::runOptimizerTx(
 
     size_t idx = 0;
     for (const auto& mg : result->mgResults)
-        applySequence(sg_ids[idx++], mg.sequence);
+        applySequence(sgIds[idx++], mg.sequence);
     for (const auto& cg : result->cgResults)
-        applySequence(sg_ids[idx++], cg.sequence);
-    return result;
+        applySequence(sgIds[idx++], cg.sequence);
+    return timingId;
 }
 
 //

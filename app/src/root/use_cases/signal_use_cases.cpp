@@ -106,8 +106,8 @@ static QString formatDuration(std::chrono::steady_clock::duration duration) {
 }
 }  // namespace
 
-std::optional<signal_optimizer::OptimizeResult> SignalUseCases::runOptimizer(
-    NodeId at, int cycleLength) {
+std::optional<TimingId> SignalUseCases::runOptimizer(NodeId at,
+                                                     int cycleLength) {
     Transaction tx;
     auto start = std::chrono::steady_clock::now();
     auto result = editor_.runOptimizerTx(tx, at, cycleLength);
@@ -119,7 +119,6 @@ std::optional<signal_optimizer::OptimizeResult> SignalUseCases::runOptimizer(
         << "Optimizer finished. Time elapsed " << formatDuration(end - start)
         << ". " << status << '\n';
 
-    if (!result) return std::nullopt;
-    cmdStack_.push(tx.commit());
+    if (result) cmdStack_.push(tx.commit());
     return result;
 }

@@ -46,14 +46,14 @@ class SignalEditor {
         Transaction& tx, TimingId timingId, SignalGroupId sgId, int min);
 
     // Optimizer Tx
-    std::optional<signal_optimizer::OptimizeResult> runOptimizerTx(
-        Transaction& tx, NodeId at, int cycleLength);
+    std::optional<TimingId> runOptimizerTx(Transaction& tx, NodeId at,
+                                           int cycleLength);
 
     // Tx variants for EditorContext cross-system cascade
     void removeNodeSignalsTx(Transaction& tx, NodeId id);
     void onEntryLayoutClearedTx(Transaction& tx, NodeId at,
-                                 const std::vector<ClusterId>& clusters,
-                                 const std::vector<MovementId>& movements);
+                                const std::vector<ClusterId>& clusters,
+                                const std::vector<MovementId>& movements);
     void onCrosswalkRemovedTx(Transaction& tx, CrosswalkId id, NodeId at);
 
    private:
@@ -63,10 +63,9 @@ class SignalEditor {
     NetworkEventBus& bus_;
 
     SignalGroupId addSignalGroupTx(Transaction& tx,
-                                    Signal::EntityMutation<SignalGroupId> mut);
+                                   Signal::EntityMutation<SignalGroupId> mut);
     void createSequenceTx(Transaction& tx, TimingId timingId,
-                           SignalGroupId sgId, int minIntervalLength,
-                           NodeId at);
+                          SignalGroupId sgId, int minIntervalLength, NodeId at);
     void removeSequenceTx(Transaction& tx, TimingId timingId,
-                           SignalGroupId sgId, NodeId at);
+                          SignalGroupId sgId, NodeId at);
 };

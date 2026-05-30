@@ -4,6 +4,7 @@
 #include <QDebug>
 
 #include "road_network/graph/data/movement.hpp"
+#include "road_network/signal/data/interval.hpp"
 #include "road_network/util/geometry/polyline.hpp"
 #include "signal_debug.hpp"
 #include "ui/network/network_scene.hpp"
@@ -205,9 +206,23 @@ void Application::show() {
     debug_print::streamPermitted(n1, document_->graph());
     debug_print::streamIntergreen(n1, document_->graph());
 
-    auto result = s.runOptimizer(n1, 120);
+    auto t1 = s.runOptimizer(n1, 120);
 
     debug_print::intergreenMatrix(n1, document_->signal());
     debug_print::nodeTimings(n1, document_->signal(), document_->graph(),
                              document_->demand());
+    // const auto& groups =
+    //     document_->signal().data().nodeSignals().get(n1)->signalGroups;
+    // auto i11 = s.setIntervals(*t1, groups[11], {Interval(3, 32, 0, 4)});
+    // auto i5 = s.setIntervals(*t1, groups[5], {Interval(42, 86 - 42, 1, 3)});
+
+    // auto i10 = s.setIntervals(*t1, groups[10], {Interval(108, 23, 0, 4)});
+    // auto i7 = s.setIntervals(*t1, groups[7], {Interval(58, 41, 1, 3)});
+
+    // if (!i11) qDebug() << "no i11";
+    // if (!i5) qDebug() << "no i5";
+    // if (!i10) qDebug() << "no i10";
+    // if (!i7) qDebug() << "no i7";
+    // debug_print::nodeTimings(n1, document_->signal(), document_->graph(),
+    //                          document_->demand());
 }

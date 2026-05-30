@@ -32,13 +32,12 @@ class SignalUseCases {
 
     void setAlwaysActive(TimingId timingId, SignalGroupId sgId);
     std::expected<void, TimingError> setIntervals(
-        TimingId timingId, SignalGroupId sgId,
-        std::vector<Interval> intervals);
-    std::expected<void, TimingWarning> setMinIntervalLength(
-        TimingId timingId, SignalGroupId sgId, int min);
+        TimingId timingId, SignalGroupId sgId, std::vector<Interval> intervals);
+    std::expected<void, TimingWarning> setMinIntervalLength(TimingId timingId,
+                                                            SignalGroupId sgId,
+                                                            int min);
 
-    std::optional<signal_optimizer::OptimizeResult> runOptimizer(
-        NodeId at, int cycleLength);
+    std::optional<TimingId> runOptimizer(NodeId at, int cycleLength);
 
    private:
     SignalEditor& editor_;
