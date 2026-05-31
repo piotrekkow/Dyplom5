@@ -27,6 +27,8 @@ struct OptimizeResult {
     std::vector<CrosswalkGroupResult> cgResults;
 };
 
+// Runs the full optimization pipeline for a single intersection node.
+// Returns nullopt if the node has no entries/series or no feasible plan exists.
 std::optional<OptimizeResult> optimize(NodeId node, const Graph& graph,
                                        const Demand& demand, int cycleLength);
 

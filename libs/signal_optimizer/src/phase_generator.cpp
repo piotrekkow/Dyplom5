@@ -102,8 +102,6 @@ void enumerateCliques(const GConfig& cfg, const std::vector<GId>& candidates,
 
 }  // namespace
 
-// Enumerates every valid phase (all cliques, not just maximal ones).
-// Drop-in swap for findMaximalCliques to test full search space tractability.
 std::vector<GPhase> findAllCliques(const GConfig& cfg) {
     auto N = static_cast<GId>(cfg.groups.size());
     std::vector<GPhase> result;

@@ -487,7 +487,7 @@ void nodeTimings(NodeId node, const Signal& signal, const Graph& graph,
                      std::get<SignalSequence>(seq).intervals()) {
                     if (iv.greenDuration() > 0)
                         std::cout << "(" << iv.greenStart() << "-"
-                                  << iv.greenEnd() << ") ";
+                                  << iv.greenEnd() % T << ") ";
                 }
             }
             std::cout << "\033[0m\n";

@@ -17,6 +17,6 @@ class Document {
 
    private:
     Graph graph_;
-    Demand demand_;  // constructed after graph_ (member declaration order)
+    Demand demand_;
     Signal signal_;
 };

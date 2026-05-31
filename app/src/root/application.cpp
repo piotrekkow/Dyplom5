@@ -141,7 +141,6 @@ void Application::show() {
     Polyline cssPath;
     cssPath.setStart({.x = 42, .y = -9.2f});
     cssPath.addLine({.x = 42, .y = 15.6f});
-    qDebug() << "css len =" << cssPath.length();
     g.setCrosswalkSeriesPedPath(css, cssPath);
 
     // CW E
@@ -159,7 +158,6 @@ void Application::show() {
     Polyline csePath;
     csePath.setStart({.x = 20.7f, .y = 30.9f});
     csePath.addLine({.x = -4.4f, .y = 30.8f});
-    qDebug() << "cse len =" << csePath.length();
     g.setCrosswalkSeriesPedPath(cse, csePath);
 
     // CW W
@@ -211,18 +209,20 @@ void Application::show() {
     debug_print::intergreenMatrix(n1, document_->signal());
     debug_print::nodeTimings(n1, document_->signal(), document_->graph(),
                              document_->demand());
-    // const auto& groups =
-    //     document_->signal().data().nodeSignals().get(n1)->signalGroups;
-    // auto i11 = s.setIntervals(*t1, groups[11], {Interval(3, 32, 0, 4)});
-    // auto i5 = s.setIntervals(*t1, groups[5], {Interval(42, 86 - 42, 1, 3)});
 
-    // auto i10 = s.setIntervals(*t1, groups[10], {Interval(108, 23, 0, 4)});
-    // auto i7 = s.setIntervals(*t1, groups[7], {Interval(58, 41, 1, 3)});
+    // MANUAL IMPROVEMENT
+    const auto& groups =
+        document_->signal().data().nodeSignals().get(n1)->signalGroups;
+    auto i11 = s.setIntervals(*t1, groups[11], {Interval(3, 32, 0, 4)});
+    auto i5 = s.setIntervals(*t1, groups[5], {Interval(42, 86 - 42, 1, 3)});
 
-    // if (!i11) qDebug() << "no i11";
-    // if (!i5) qDebug() << "no i5";
-    // if (!i10) qDebug() << "no i10";
-    // if (!i7) qDebug() << "no i7";
-    // debug_print::nodeTimings(n1, document_->signal(), document_->graph(),
-    //                          document_->demand());
+    auto i10 = s.setIntervals(*t1, groups[10], {Interval(108, 23, 0, 4)});
+    auto i7 = s.setIntervals(*t1, groups[7], {Interval(58, 41, 1, 3)});
+
+    if (!i11) qDebug() << "no i11";
+    if (!i5) qDebug() << "no i5";
+    if (!i10) qDebug() << "no i10";
+    if (!i7) qDebug() << "no i7";
+    debug_print::nodeTimings(n1, document_->signal(), document_->graph(),
+                             document_->demand());
 }

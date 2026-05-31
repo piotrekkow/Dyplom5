@@ -2,13 +2,13 @@
 #include <atomic>
 #include <cmath>
 #include <future>
-#include <iostream>
 #include <mutex>
+#include <print>
 #include <road_network/demand.hpp>
 #include <road_network/graph.hpp>
 #include <signal_optimizer/optimizer.hpp>
-#include <string>
 #include <unordered_map>
+#include <variant>
 
 #include "config_generator.hpp"
 #include "delay.hpp"
@@ -33,7 +33,6 @@ GInput buildInput(NodeId nodeId, const Graph& graph, const Demand& demand,
     const auto* node = gdata.nodes().get(nodeId);
     if (!node) return inp;
 
-    //
     for (EntryId eid : node->entries()) {
         const auto* entry = gdata.entries().get(eid);
         if (!entry || entry->clusters().empty()) continue;
@@ -89,7 +88,6 @@ GInput buildInput(NodeId nodeId, const Graph& graph, const Demand& demand,
         inp.entries.push_back(std::move(edata));
     }
 
-    //
     for (CrosswalkSeriesId csid : node->crosswalkSeries()) {
         const auto* cs = gdata.crosswalkSeries().get(csid);
         if (!cs || cs->crosswalks().empty()) continue;
@@ -144,14 +142,14 @@ std::optional<OptimizerRawResult> pickBest(const std::vector<GConfig>& configs,
     const int total = static_cast<int>(configs.size());
 
     if (progressBar) {
-        std::fprintf(stderr, "Optimizer: 0/%d (0%%)", total);
+        std::print(stderr, "Optimizer: 0/{} (0%)", total);
         std::fflush(stderr);
     }
     auto reportProgress = [&]() {
         if (!progressBar) return;
         int n = ++done;
-        std::fprintf(stderr, "\rOptimizer: %d/%d (%d%%)", n, total,
-                     n * 100 / total);
+        std::print(stderr, "\rOptimizer: {}/{} ({}%)", n, total,
+                   n * 100 / total);
         std::fflush(stderr);
     };
 
@@ -187,18 +185,11 @@ std::optional<OptimizerRawResult> pickBest(const std::vector<GConfig>& configs,
 
     for (auto& f : futures) f.get();
     if (progressBar) {
-        std::fprintf(stderr, "\n");
+        std::println(stderr, "");
         std::fflush(stderr);
     }
     if (globalBest.cfgIdx < 0) return std::nullopt;
     return globalBest;
-}
-
-namespace {
-// Forward distance a -> b around a cycle of length T, in [0, T).
-inline int cycleAhead(int a, int b, int T) {
-    int d = (b - a) % T;
-    return d < 0 ? d + T : d;
 }
 
 // Widen every crosswalk green window as far as the per-pair intergreen allows,
@@ -221,6 +212,12 @@ void extendCrosswalkWindows(std::vector<int>& start, std::vector<int>& len,
         return cfg.groups[ev].kind == GKind::Crosswalk ? ig + 4 : ig;
     };
 
+    // Forward distance a -> b around a cycle of length T, in [0, T).
+    auto cycleAhead = [&](int a, int b) {
+        int d = (b - a) % T;
+        return d < 0 ? d + T : d;
+    };
+
     for (GId cw = 0; cw < (GId)cfg.groups.size(); ++cw) {
         if (cfg.groups[cw].kind != GKind::Crosswalk || !present[cw]) continue;
 
@@ -232,10 +229,9 @@ void extendCrosswalkWindows(std::vector<int>& start, std::vector<int>& len,
             const int xEnd = s0[x] + l0[x];
 
             if (int clr = clearance(cw, x); clr >= 0)
-                fwd =
-                    std::min(fwd, cycleAhead(s0[cw] + l0[cw], s0[x], T) - clr);
+                fwd = std::min(fwd, cycleAhead(s0[cw] + l0[cw], s0[x]) - clr);
             if (int clr = clearance(x, cw); clr >= 0)
-                bwd = std::min(bwd, cycleAhead(xEnd, s0[cw], T) - clr);
+                bwd = std::min(bwd, cycleAhead(xEnd, s0[cw]) - clr);
         }
 
         // Don't let the two ends meet/cross; never shrink below the original.
@@ -247,7 +243,6 @@ void extendCrosswalkWindows(std::vector<int>& start, std::vector<int>& len,
         len[cw] = l0[cw] + bwd + fwd;
     }
 }
-}  // namespace
 
 std::unordered_map<GId, Sequence> computeSequences(const GConfig& bestCfg,
                                                    const GCycle& best,
@@ -257,9 +252,11 @@ std::unordered_map<GId, Sequence> computeSequences(const GConfig& bestCfg,
         int duration;
     };
 
+    const auto nGroups = bestCfg.groups.size();
+
     std::vector<std::vector<IntervalBlueprint>> seqBps(
-        bestCfg.groups.size());  // indexed by group
-    std::vector<int> pendingWrap(bestCfg.groups.size(), 0);
+        nGroups);  // indexed by group
+    std::vector<int> pendingWrap(nGroups, 0);
     auto k = best.phases.size();
     int phaseOnset = 0;
     for (int i = 0; i < k; ++i) {
@@ -286,7 +283,7 @@ std::unordered_map<GId, Sequence> computeSequences(const GConfig& bestCfg,
         phaseOnset += alloc + next.makespan;
     }
 
-    for (GId gid = 0; gid < bestCfg.groups.size(); ++gid) {
+    for (GId gid = 0; gid < nGroups; ++gid) {
         if (pendingWrap[gid] <= 0) continue;
         if (!seqBps[gid].empty()) {
             seqBps[gid].back().duration += pendingWrap[gid];
@@ -296,10 +293,10 @@ std::unordered_map<GId, Sequence> computeSequences(const GConfig& bestCfg,
         }
     }
 
-    std::vector<int> wStart(bestCfg.groups.size(), 0);
-    std::vector<int> wLen(bestCfg.groups.size(), 0);
-    std::vector<bool> present(bestCfg.groups.size(), false);
-    for (GId gid = 0; gid < (GId)bestCfg.groups.size(); ++gid) {
+    std::vector<int> wStart(nGroups, 0);
+    std::vector<int> wLen(nGroups, 0);
+    std::vector<bool> present(nGroups, false);
+    for (GId gid = 0; gid < nGroups; ++gid) {
         if (seqBps[gid].size() != 1) continue;  // skip empty / always-active
         const auto& bp = seqBps[gid].front();
         if (bp.onset == 0 && bp.duration == cycleLength) continue;
@@ -308,31 +305,38 @@ std::unordered_map<GId, Sequence> computeSequences(const GConfig& bestCfg,
         present[gid] = true;
     }
     extendCrosswalkWindows(wStart, wLen, present, bestCfg, cycleLength);
-    for (GId gid = 0; gid < (GId)bestCfg.groups.size(); ++gid)
+    for (GId gid = 0; gid < nGroups; ++gid)
         if (present[gid] && bestCfg.groups[gid].kind == GKind::Crosswalk)
-            seqBps[gid].front() = {wStart[gid], wLen[gid]};
+            seqBps[gid].front() = {.onset = wStart[gid], .duration = wLen[gid]};
 
     std::unordered_map<GId, Sequence> sequences;
-    for (GId gid = 0; gid < bestCfg.groups.size(); ++gid) {
+    for (GId gid = 0; gid < nGroups; ++gid) {
         const auto& g = bestCfg.groups[gid];
         int evAtomic = g.kind == GKind::Crosswalk ? 4 : 3;
         int apAtomic = g.kind == GKind::Crosswalk ? 0 : 1;
 
         std::vector<Interval> ivs = {};
+        bool alwaysActive = false;
         for (const auto& bp : seqBps[gid]) {
             if (bp.onset == 0 && bp.duration == cycleLength) {
-                sequences[gid] = AlwaysActive{};
+                alwaysActive = true;
+
                 break;
             } else {
                 ivs.emplace_back(bp.onset, bp.duration, apAtomic, evAtomic);
             }
         }
-        SignalSequence seq{g.tMin};
-        static_cast<void>(seq.setIntervals(
-            std::move(ivs)));  // NOLINT(bugprone-unused-return-value)
-        sequences[gid] = std::move(seq);
+        if (alwaysActive) {
+            sequences[gid] = AlwaysActive{};
+        } else {
+            SignalSequence seq{g.tMin};
+            static_cast<void>(
+                seq.setIntervals(  // NOLINT(bugprone-unused-return-value)
+                    std::move(ivs)));
+            sequences[gid] = std::move(seq);
+        }
     }
-    return sequences;
+    return std::move(sequences);
 }
 
 signal_optimizer::OptimizeResult compileResult(

@@ -6,8 +6,8 @@
 
 #include "types.hpp"
 
-GTransition computeTransition(const GPhase& from, const GPhase& to,
-                              const GConfig& cfg) {
+GTransition computeTransitionSimple(const GPhase& from, const GPhase& to,
+                                    const GConfig& cfg) {
     std::unordered_set<GId> fromSet(from.groupIds.begin(), from.groupIds.end());
     std::unordered_set<GId> toSet(to.groupIds.begin(), to.groupIds.end());
 
@@ -53,8 +53,8 @@ GTransition computeTransition(const GPhase& from, const GPhase& to,
     return tr;
 }
 
-GTransition computeTransitionV2(const GPhase& from, const GPhase& to,
-                                const GConfig& cfg) {
+GTransition computeTransitionWeighted(const GPhase& from, const GPhase& to,
+                                      const GConfig& cfg) {
     std::unordered_set<GId> fromSet(from.groupIds.begin(), from.groupIds.end());
     std::unordered_set<GId> toSet(to.groupIds.begin(), to.groupIds.end());
 
@@ -77,11 +77,8 @@ GTransition computeTransitionV2(const GPhase& from, const GPhase& to,
         makespan = std::max(makespan, igM);
     }
 
-    // Conservative start: fromOnly groups turn red immediately, toOnly groups
-    // start green only after full makespan.
-    std::unordered_map<GId, int>
-        greenEnd;  // fromOnly: seconds green in transition
-    std::unordered_map<GId, int> startTime;  // toOnly: when it first goes green
+    std::unordered_map<GId, int> greenEnd;
+    std::unordered_map<GId, int> startTime;
     for (GId gid : fromOnly) greenEnd[gid] = 0;
     for (GId gid : toOnly) startTime[gid] = makespan;
 
@@ -162,7 +159,7 @@ enumerateSequences(const std::vector<GPhase>& cover, const GConfig& cfg) {
         for (int i = 0; i < k; i++) {
             const GPhase& from = cover[order[i]];
             const GPhase& to = cover[order[(i + 1) % k]];
-            transitions[i] = computeTransitionV2(from, to, cfg);
+            transitions[i] = computeTransitionWeighted(from, to, cfg);
         }
         result.emplace_back(order, std::move(transitions));
     } while (std::next_permutation(perm.begin(), perm.end()));
