@@ -1,13 +1,13 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <cstdio>
 #include <future>
-#include <iostream>
+#include <limits>
 #include <mutex>
 #include <road_network/demand.hpp>
 #include <road_network/graph.hpp>
 #include <signal_optimizer/optimizer.hpp>
-#include <string>
 #include <unordered_map>
 
 #include "config_generator.hpp"
@@ -104,9 +104,133 @@ GInput buildInput(NodeId nodeId, const Graph& graph, const Demand& demand,
     return inp;
 }
 
-GCycle optimizeConfig(const std::vector<GPhase>& validPhases,
-                      const std::vector<std::vector<GPhase>>& covers,
-                      const GConfig& cfg, int T) {
+// True if every group in `phase` is compatible with `cwGid` (no intergreen).
+bool phaseCompatibleWith(const GPhase& phase, GId cwGid, const GConfig& cfg) {
+    const auto& compat = cfg.compatibility.at(cwGid);
+    return std::ranges::all_of(phase.groupIds,
+                               [&](GId gid) { return compat.contains(gid); });
+}
+
+// Rough phase minimum ignoring transition green, used for heuristic selection.
+int estimatePhaseMin(const GPhase& phase, const GConfig& cfg) {
+    int m = 0;
+    for (GId gid : phase.groupIds) m = std::max(m, cfg.groups[gid].tMin);
+    return m;
+}
+
+// Among `compatIndices`, pick the phase whose estimated minimum is closest
+// to `cwTMin`: prefer phases that already need >= cwTMin (free insertion),
+// picking the smallest such; fall back to the largest below cwTMin.
+int pickCompatiblePhase(const std::vector<int>& compatIndices,
+                        const std::vector<GPhase>& phases, const GConfig& cfg,
+                        int cwTMin) {
+    int bestPi = compatIndices[0];
+    int bestMin = estimatePhaseMin(phases[bestPi], cfg);
+
+    for (int i = 1; i < (int)compatIndices.size(); ++i) {
+        int pi = compatIndices[i];
+        int phMin = estimatePhaseMin(phases[pi], cfg);
+        bool curOk = bestMin >= cwTMin;
+        bool newOk = phMin >= cwTMin;
+        if (newOk && !curOk) {
+            bestPi = pi;
+            bestMin = phMin;
+            continue;
+        }
+        if (!newOk && curOk) continue;
+        if (newOk && phMin < bestMin) {
+            bestPi = pi;
+            bestMin = phMin;
+            continue;
+        }
+        if (!newOk && phMin > bestMin) {
+            bestPi = pi;
+            bestMin = phMin;
+        }
+    }
+    return bestPi;
+}
+
+// Insert a dedicated crosswalk phase at the position that minimises the net
+// increase in transition overhead.
+int findBestInsertPosition(const std::vector<GPhase>& phases,
+                           const std::vector<GTransition>& transitions,
+                           const GPhase& cwPhase, const GConfig& cfg) {
+    int k = static_cast<int>(phases.size());
+    int bestPos = 0;
+    int bestOverhead = std::numeric_limits<int>::max();
+    for (int pos = 0; pos < k; ++pos) {
+        int next = (pos + 1) % k;
+        int overhead =
+            computeTransitionV2(phases[pos], cwPhase, cfg).makespan +
+            computeTransitionV2(cwPhase, phases[next], cfg).makespan -
+            transitions[pos].makespan;
+        if (overhead < bestOverhead) {
+            bestOverhead = overhead;
+            bestPos = pos;
+        }
+    }
+    return bestPos;
+}
+
+// Stage 4: insert all crosswalk groups from `cfg` into the vehicle-only cycle.
+// Each crosswalk is placed in a compatible existing phase, or given a new
+// dedicated phase at the cheapest insertion point. Returns nullopt if any
+// crosswalk has no compatible existing phase AND creating a dedicated phase
+// would still leave it incompatible with its neighbours (should not happen in
+// a valid config, but guards against degenerate inputs).
+std::optional<GCycle> insertCrosswalks(GCycle vehCycle, const GConfig& cfg,
+                                       int T) {
+    auto phases = std::move(vehCycle.phases);
+
+    for (GId cwGid = 0; cwGid < (GId)cfg.groups.size(); ++cwGid) {
+        const auto& cw = cfg.groups[cwGid];
+        if (cw.kind != GKind::Crosswalk) continue;
+
+        std::vector<int> compatIndices;
+        for (int pi = 0; pi < (int)phases.size(); ++pi)
+            if (phaseCompatibleWith(phases[pi], cwGid, cfg))
+                compatIndices.push_back(pi);
+
+        if (compatIndices.empty()) {
+            // Build current transitions so we can score insertion positions.
+            int k = static_cast<int>(phases.size());
+            std::vector<GTransition> curTr(k);
+            for (int i = 0; i < k; ++i)
+                curTr[i] =
+                    computeTransitionV2(phases[i], phases[(i + 1) % k], cfg);
+
+            GPhase cwPhase{{cwGid}};
+            int pos = findBestInsertPosition(phases, curTr, cwPhase, cfg);
+            phases.insert(phases.begin() + pos + 1, cwPhase);
+        } else {
+            int bestPi =
+                pickCompatiblePhase(compatIndices, phases, cfg, cw.tMin);
+            phases[bestPi].groupIds.push_back(cwGid);
+        }
+    }
+
+    // Recompute all transitions with crosswalks in place.
+    int k = static_cast<int>(phases.size());
+    std::vector<GTransition> transitions(k);
+    for (int i = 0; i < k; ++i)
+        transitions[i] =
+            computeTransitionV2(phases[i], phases[(i + 1) % k], cfg);
+
+    auto alloc = greedyMarginalAlloc(phases, transitions, cfg, T);
+    if (!alloc) return std::nullopt;
+
+    double D_full = totalDelay(*alloc, cfg, T);
+    return GCycle{.phases = std::move(phases),
+                  .transitions = std::move(transitions),
+                  .alloc = std::move(*alloc),
+                  .D = D_full};
+}
+
+// Stage 5: per-config optimisation with D_veh prune.
+// `bestD` is the global best complete delay shared across parallel workers.
+GCycle optimizeConfig(const std::vector<std::vector<GPhase>>& covers,
+                      const GConfig& cfg, int T, std::atomic<double>& bestD) {
     GCycle best;
 
     for (const auto& cover : covers) {
@@ -116,16 +240,32 @@ GCycle optimizeConfig(const std::vector<GPhase>& validPhases,
             phases.reserve(order.size());
             for (int i : order) phases.push_back(cover[i]);
 
-            auto alloc = greedyMarginalAlloc(phases, transitions, cfg, T);
-            if (!alloc) continue;
+            auto vehAlloc = greedyMarginalAlloc(phases, transitions, cfg, T);
+            if (!vehAlloc) continue;
 
-            double D = totalDelay(*alloc, cfg, T);
-            GCycle candidate{.phases = phases,
-                             .transitions = std::move(transitions),
-                             .alloc = std::move(*alloc),
-                             .D = D};
+            double D_veh = totalDelay(*vehAlloc, cfg, T);
 
-            if (candidate.D < best.D) best = std::move(candidate);
+            // Admissible prune: D_full >= D_veh, so if D_veh is already no
+            // better than the known best, skip crosswalk insertion.
+            if (D_veh >= bestD.load(std::memory_order_relaxed)) continue;
+
+            GCycle vehCycle{.phases = phases,
+                            .transitions = std::move(transitions),
+                            .alloc = std::move(*vehAlloc),
+                            .D = D_veh};
+
+            auto fullCycle = insertCrosswalks(std::move(vehCycle), cfg, T);
+            if (!fullCycle) continue;
+
+            if (fullCycle->D < best.D) {
+                best = std::move(*fullCycle);
+                // Propagate to prune other workers.
+                double prev = bestD.load(std::memory_order_relaxed);
+                while (best.D < prev &&
+                       !bestD.compare_exchange_weak(
+                           prev, best.D, std::memory_order_relaxed)) {
+                }
+            }
         }
     }
     return best;
@@ -139,6 +279,7 @@ struct OptimizerRawResult {
 std::optional<OptimizerRawResult> pickBest(const std::vector<GConfig>& configs,
                                            int T, bool progressBar = true) {
     OptimizerRawResult globalBest;
+    std::atomic<double> globalBestD{std::numeric_limits<double>::infinity()};
     std::mutex mu;
     std::atomic<int> done{0};
     const int total = static_cast<int>(configs.size());
@@ -162,7 +303,15 @@ std::optional<OptimizerRawResult> pickBest(const std::vector<GConfig>& configs,
         futures.push_back(std::async(std::launch::async, [&, ci]() {
             const auto& cfg = configs[ci];
 
-            auto validPhases = findAllCliques(cfg);
+            // Stage 1: movement-only phases for cover generation.
+            auto allPhases = findAllCliques(cfg);
+            std::vector<GPhase> validPhases;
+            for (const auto& ph : allPhases) {
+                if (std::ranges::none_of(ph.groupIds, [&](GId gid) {
+                        return cfg.groups[gid].kind == GKind::Crosswalk;
+                    }))
+                    validPhases.push_back(ph);
+            }
             if (validPhases.empty()) {
                 reportProgress();
                 return;
@@ -174,7 +323,7 @@ std::optional<OptimizerRawResult> pickBest(const std::vector<GConfig>& configs,
                 return;
             }
 
-            GCycle result = optimizeConfig(validPhases, covers, cfg, T);
+            GCycle result = optimizeConfig(covers, cfg, T, globalBestD);
 
             std::lock_guard<std::mutex> lock(mu);
             if (result.D < globalBest.cycle.D) {
@@ -194,61 +343,6 @@ std::optional<OptimizerRawResult> pickBest(const std::vector<GConfig>& configs,
     return globalBest;
 }
 
-namespace {
-// Forward distance a -> b around a cycle of length T, in [0, T).
-inline int cycleAhead(int a, int b, int T) {
-    int d = (b - a) % T;
-    return d < 0 ? d + T : d;
-}
-
-// Widen every crosswalk green window as far as the per-pair intergreen allows,
-// scanning the whole cycle. Windows are absolute: start in [0,T), end may
-// exceed T (wrap). Vehicle windows are read-only. Every extension is measured
-// against the pre-pass snapshot, so the result is independent of processing
-// order even when two crosswalks conflict with each other.
-void extendCrosswalkWindows(std::vector<int>& start, std::vector<int>& len,
-                            const std::vector<bool>& present,
-                            const GConfig& cfg, int T) {
-    const auto s0 = start;
-    const auto l0 = len;
-
-    // Required clearance between ev losing green and ap gaining green.
-    // -1 == compatible (no constraint). Crosswalk evac reserves +4 flashing
-    // green, mirroring computeTransitionV2's `ig + 4`.
-    auto clearance = [&](GId ev, GId ap) {
-        int ig = cfg.intergreen[ev][ap];
-        if (ig < 0) return -1;
-        return cfg.groups[ev].kind == GKind::Crosswalk ? ig + 4 : ig;
-    };
-
-    for (GId cw = 0; cw < (GId)cfg.groups.size(); ++cw) {
-        if (cfg.groups[cw].kind != GKind::Crosswalk || !present[cw]) continue;
-
-        int fwd = T;  // how far cw's end may move forward (cw evac -> X appr)
-        int bwd =
-            T;  // how far cw's start may move backward (X evac -> cw appr)
-        for (GId x = 0; x < (GId)cfg.groups.size(); ++x) {
-            if (x == cw || !present[x]) continue;
-            const int xEnd = s0[x] + l0[x];
-
-            if (int clr = clearance(cw, x); clr >= 0)
-                fwd =
-                    std::min(fwd, cycleAhead(s0[cw] + l0[cw], s0[x], T) - clr);
-            if (int clr = clearance(x, cw); clr >= 0)
-                bwd = std::min(bwd, cycleAhead(xEnd, s0[cw], T) - clr);
-        }
-
-        // Don't let the two ends meet/cross; never shrink below the original.
-        const int room = T - l0[cw];
-        fwd = std::clamp(fwd, 0, room);
-        bwd = std::clamp(bwd, 0, room - fwd);
-
-        start[cw] = ((s0[cw] - bwd) % T + T) % T;
-        len[cw] = l0[cw] + bwd + fwd;
-    }
-}
-}  // namespace
-
 std::unordered_map<GId, Sequence> computeSequences(const GConfig& bestCfg,
                                                    const GCycle& best,
                                                    int cycleLength) {
@@ -262,7 +356,7 @@ std::unordered_map<GId, Sequence> computeSequences(const GConfig& bestCfg,
     std::vector<int> pendingWrap(bestCfg.groups.size(), 0);
     auto k = best.phases.size();
     int phaseOnset = 0;
-    for (int i = 0; i < k; ++i) {
+    for (int i = 0; i < (int)k; ++i) {
         const auto& phase = best.phases[i];
         const auto& next = best.transitions[i];
         const auto& prev =
@@ -286,7 +380,7 @@ std::unordered_map<GId, Sequence> computeSequences(const GConfig& bestCfg,
         phaseOnset += alloc + next.makespan;
     }
 
-    for (GId gid = 0; gid < bestCfg.groups.size(); ++gid) {
+    for (GId gid = 0; gid < (int)bestCfg.groups.size(); ++gid) {
         if (pendingWrap[gid] <= 0) continue;
         if (!seqBps[gid].empty()) {
             seqBps[gid].back().duration += pendingWrap[gid];
@@ -296,40 +390,28 @@ std::unordered_map<GId, Sequence> computeSequences(const GConfig& bestCfg,
         }
     }
 
-    std::vector<int> wStart(bestCfg.groups.size(), 0);
-    std::vector<int> wLen(bestCfg.groups.size(), 0);
-    std::vector<bool> present(bestCfg.groups.size(), false);
-    for (GId gid = 0; gid < (GId)bestCfg.groups.size(); ++gid) {
-        if (seqBps[gid].size() != 1) continue;  // skip empty / always-active
-        const auto& bp = seqBps[gid].front();
-        if (bp.onset == 0 && bp.duration == cycleLength) continue;
-        wStart[gid] = ((bp.onset % cycleLength) + cycleLength) % cycleLength;
-        wLen[gid] = bp.duration;
-        present[gid] = true;
-    }
-    extendCrosswalkWindows(wStart, wLen, present, bestCfg, cycleLength);
-    for (GId gid = 0; gid < (GId)bestCfg.groups.size(); ++gid)
-        if (present[gid] && bestCfg.groups[gid].kind == GKind::Crosswalk)
-            seqBps[gid].front() = {wStart[gid], wLen[gid]};
-
     std::unordered_map<GId, Sequence> sequences;
-    for (GId gid = 0; gid < bestCfg.groups.size(); ++gid) {
+    for (GId gid = 0; gid < (GId)bestCfg.groups.size(); ++gid) {
         const auto& g = bestCfg.groups[gid];
         int evAtomic = g.kind == GKind::Crosswalk ? 4 : 3;
         int apAtomic = g.kind == GKind::Crosswalk ? 0 : 1;
 
         std::vector<Interval> ivs = {};
         for (const auto& bp : seqBps[gid]) {
-            if (bp.onset == 0 && bp.duration == cycleLength) {
+            // Normalize onset to [0, T): a window at −k equals one at T−k.
+            int onset = ((bp.onset % cycleLength) + cycleLength) % cycleLength;
+            if (onset == 0 && bp.duration == cycleLength) {
                 sequences[gid] = AlwaysActive{};
                 break;
             } else {
-                ivs.emplace_back(bp.onset, bp.duration, apAtomic, evAtomic);
+                ivs.emplace_back(onset, bp.duration, apAtomic, evAtomic);
             }
         }
+        if (sequences.count(gid)) continue;  // already set to AlwaysActive
         SignalSequence seq{g.tMin};
-        static_cast<void>(seq.setIntervals(
-            std::move(ivs)));  // NOLINT(bugprone-unused-return-value)
+        static_cast<void>(
+            seq.setIntervals(  // NOLINT(bugprone-unused-return-value)
+                std::move(ivs)));
         sequences[gid] = std::move(seq);
     }
     return sequences;

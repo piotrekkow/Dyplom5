@@ -6,6 +6,11 @@
 
 #include "types.hpp"
 
+int evacuationClearance(GId gid, int maxIg, const GConfig& cfg) {
+    return cfg.groups[gid].kind == GKind::Crosswalk ? std::max(maxIg + 4, 4)
+                                                     : std::max(maxIg, 3);
+}
+
 GTransition computeTransition(const GPhase& from, const GPhase& to,
                               const GConfig& cfg) {
     std::unordered_set<GId> fromSet(from.groupIds.begin(), from.groupIds.end());
@@ -27,8 +32,7 @@ GTransition computeTransition(const GPhase& from, const GPhase& to,
     for (GId g_ev : fromOnly) {
         int ig = 0;
         for (GId g_ap : toOnly) ig = std::max(ig, cfg.intergreen[g_ev][g_ap]);
-        bool xwalk = cfg.groups[g_ev].kind == GKind::Crosswalk;
-        igMax[g_ev] = xwalk ? std::max(ig + 4, 4) : std::max(ig, 3);
+        igMax[g_ev] = evacuationClearance(g_ev, ig, cfg);
         makespan = std::max(makespan, igMax[g_ev]);
     }
 
@@ -72,9 +76,7 @@ GTransition computeTransitionV2(const GPhase& from, const GPhase& to,
     for (GId g_ev : fromOnly) {
         int ig = 0;
         for (GId g_ap : toOnly) ig = std::max(ig, cfg.intergreen[g_ev][g_ap]);
-        bool xwalk = cfg.groups[g_ev].kind == GKind::Crosswalk;
-        int igM = xwalk ? std::max(ig + 4, 4) : std::max(ig, 3);
-        makespan = std::max(makespan, igM);
+        makespan = std::max(makespan, evacuationClearance(g_ev, ig, cfg));
     }
 
     // Conservative start: fromOnly groups turn red immediately, toOnly groups

@@ -89,6 +89,47 @@ std::optional<GGreen> greedyMarginalAlloc(
     return std::move(alloc);
 }
 
+float removeCheapestSeconds(GGreen& alloc, const std::vector<GPhase>& phases,
+                            const GConfig& cfg, int T, int deficit) {
+    float totalPenalty = 0.f;
+    auto Tf = static_cast<float>(T);
+
+    // Delay increase from removing 1 s from phase i
+    auto penalty = [&](int i) {
+        float delta = 0.f;
+        for (GId gid : phases[i].groupIds) {
+            auto gtf = static_cast<float>(alloc.tGroup[gid]);
+            const auto& g = cfg.groups[gid];
+            delta += groupDelay(g, {.greenTime = gtf - 1, .T = Tf}) -
+                     groupDelay(g, {.greenTime = gtf, .T = Tf});
+        }
+        return delta;
+    };
+
+    // Phase is removable if no group would drop below tMin
+    auto canRemove = [&](int i) {
+        if (alloc.tPhase[i] <= 0) return false;
+        for (GId gid : phases[i].groupIds)
+            if (alloc.tGroup[gid] - 1 < cfg.groups[gid].tMin) return false;
+        return true;
+    };
+
+    for (int d = 0; d < deficit; ++d) {
+        int bestIdx = -1;
+        float bestPenalty = std::numeric_limits<float>::infinity();
+        for (int i = 0; i < (int)phases.size(); ++i) {
+            if (!canRemove(i)) continue;
+            float p = penalty(i);
+            if (p < bestPenalty) { bestPenalty = p; bestIdx = i; }
+        }
+        if (bestIdx < 0) break;
+        alloc.tPhase[bestIdx]--;
+        for (GId gid : phases[bestIdx].groupIds) alloc.tGroup[gid]--;
+        totalPenalty += bestPenalty;
+    }
+    return totalPenalty;
+}
+
 // std::optional<GAlloc> allocateGreen(const std::vector<GPhase>& phases,
 //                                     const std::vector<GTransition>&
 //                                     transitions, const GConfig& cfg, int T) {

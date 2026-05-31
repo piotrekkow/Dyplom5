@@ -1,86 +1,80 @@
 #include "phase_cover.hpp"
 
 #include <algorithm>
-#include <cassert>
-#include <unordered_set>
+#include <limits>
 
 namespace {
 
-// Canonical form of a cover for deduplication
-std::vector<std::vector<GId>> canonical(const std::vector<GPhase>& cover) {
-    std::vector<std::vector<GId>> c;
-    c.reserve(cover.size());
-    for (const auto& ph : cover) {
-        auto ids = ph.groupIds;
-        std::ranges::sort(ids);
-        c.push_back(std::move(ids));
-    }
-    std::ranges::sort(c);
-    return c;
-}
+static constexpr size_t kMaxCovers = 5000;
+// Redundant phases allowed beyond minimal coverage (enables double-service of
+// saturated groups such as {458}{5789}{679} where 5K is served twice).
+static constexpr int kRedundantPhases = 1;
 
-// Greedy cover starting from a forced first phase index
-// Returns the cover or empty vector if forced phase cannot start a valid cover
-std::vector<GPhase> greedyCover(const std::vector<GPhase>& validPhases,
-                                const GConfig& cfg, int forcedFirstIdx) {
-    // Required groups: all movement + crosswalk groups
-    std::unordered_set<GId> required;
-    for (const auto& g : cfg.groups) required.insert(g.id);
+// DFS cover enumeration using pivot branching.
+// Always chooses the uncovered required group reachable by the fewest
+// remaining phases as the branching variable — this prunes hard and keeps
+// the search focused.
+// When uncovered == 0, records the current cover and, if redundantBudget > 0,
+// continues to add one more phase at a time so non-minimal covers with
+// deliberate redundancy are also emitted.
+void enumCoversRec(const std::vector<GPhase>& phases,
+                   const std::vector<GId>& sortedReq,
+                   int startIdx,
+                   int redundantBudget,
+                   std::vector<GPhase>& current,
+                   std::vector<bool>& covered,
+                   int uncovered,
+                   std::vector<std::vector<GPhase>>& result) {
+    if (result.size() >= kMaxCovers) return;
 
-    std::unordered_set<GId> covered;
-    std::vector<GPhase> cover;
-
-    // Seed with forced first phase
-    const auto& first = validPhases[forcedFirstIdx];
-    cover.push_back(first);
-    for (GId gid : first.groupIds) covered.insert(gid);
-
-    while (covered.size() < required.size()) {
-        // Find uncovered required groups
-        std::unordered_set<GId> uncovered;
-        for (GId gid : required) {
-            if (covered.find(gid) == covered.end()) uncovered.insert(gid);
-        }
-
-        // Pick phase covering most uncovered (tie: highest sum maxY)
-        int bestIdx = -1;
-        int bestNew = -1;
-        float bestY = -1.0;
-        for (int pi = 0; pi < (int)validPhases.size(); pi++) {
-            const auto& ph = validPhases[pi];
-            int newCovered = 0;
-            float newY = 0.0;
-            for (GId gid : ph.groupIds) {
-                if (uncovered.count(gid) > 0) {
-                    newCovered++;
-                    newY = std::max(newY, cfg.groups[gid].maxY);
-                }
-            }
-            if (newCovered > bestNew ||
-                (newCovered == bestNew && newY > bestY)) {
-                bestIdx = pi;
-                bestNew = newCovered;
-                bestY = newY;
+    if (uncovered == 0) {
+        result.push_back(current);
+        if (redundantBudget > 0) {
+            for (int i = startIdx; i < (int)phases.size(); ++i) {
+                if (result.size() >= kMaxCovers) return;
+                current.push_back(phases[i]);
+                enumCoversRec(phases, sortedReq, i + 1, redundantBudget - 1,
+                              current, covered, 0, result);
+                current.pop_back();
             }
         }
-
-        if (bestIdx < 0 || bestNew == 0) {
-            // Cannot cover remaining required groups — add any phase with
-            // covered groups (shouldn't normally happen)
-            assert(false);
-            break;
-        }
-
-        const auto& best_ph = validPhases[bestIdx];
-        cover.push_back(best_ph);
-        for (GId gid : best_ph.groupIds) covered.insert(gid);
+        return;
     }
 
-    // Verify all required groups are covered
-    for (GId gid : required) {
-        if (covered.find(gid) == covered.end()) return {};
+    if (startIdx >= (int)phases.size()) return;
+
+    // Pivot: uncovered required group covered by the fewest phases[startIdx:]
+    GId pivot = -1;
+    int pivotCnt = std::numeric_limits<int>::max();
+    for (GId g : sortedReq) {
+        if (covered[g]) continue;
+        int cnt = 0;
+        for (int i = startIdx; i < (int)phases.size(); ++i)
+            if (std::ranges::any_of(phases[i].groupIds,
+                                    [g](GId x) { return x == g; })) ++cnt;
+        if (cnt == 0) return;  // prune: g is unreachable with remaining phases
+        if (cnt < pivotCnt) { pivotCnt = cnt; pivot = g; }
     }
-    return cover;
+    if (pivot < 0) return;
+
+    for (int i = startIdx; i < (int)phases.size(); ++i) {
+        if (result.size() >= kMaxCovers) return;
+        if (!std::ranges::any_of(phases[i].groupIds,
+                                 [pivot](GId g) { return g == pivot; })) continue;
+
+        current.push_back(phases[i]);
+        std::vector<GId> added;
+        for (GId g : phases[i].groupIds)
+            if (g < (int)covered.size() && !covered[g] &&
+                std::ranges::binary_search(sortedReq, g))
+            { covered[g] = true; added.push_back(g); }
+
+        enumCoversRec(phases, sortedReq, i + 1, redundantBudget, current,
+                      covered, uncovered - (int)added.size(), result);
+
+        current.pop_back();
+        for (GId g : added) covered[g] = false;
+    }
 }
 
 }  // namespace
@@ -89,22 +83,18 @@ std::vector<std::vector<GPhase>> generateCovers(
     const std::vector<GPhase>& validPhases, const GConfig& cfg) {
     if (validPhases.empty()) return {};
 
-    std::vector<std::vector<std::vector<GId>>> seen_canonicals;
+    std::vector<GId> sortedReq;
+    for (const auto& g : cfg.groups)
+        if (g.kind != GKind::Crosswalk) sortedReq.push_back(g.id);
+    std::ranges::sort(sortedReq);
+    if (sortedReq.empty()) return {};
+
+    GId maxGId = sortedReq.back();
+    std::vector<bool> covered(maxGId + 1, false);
     std::vector<std::vector<GPhase>> result;
+    std::vector<GPhase> current;
 
-    auto try_add = [&](std::vector<GPhase>&& cover) {
-        if (cover.empty()) return;
-        auto c = canonical(cover);
-        for (const auto& prev : seen_canonicals) {
-            if (prev == c) return;
-        }
-        seen_canonicals.push_back(c);
-        result.push_back(std::move(cover));
-    };
-
-    for (int i = 0; i < (int)validPhases.size(); i++) {
-        try_add(greedyCover(validPhases, cfg, i));
-    }
-
+    enumCoversRec(validPhases, sortedReq, 0, kRedundantPhases, current, covered,
+                  static_cast<int>(sortedReq.size()), result);
     return result;
 }

@@ -3,6 +3,9 @@
 
 #include "types.hpp"
 
+// Evacuation clearance for a group: crosswalk adds 4 s flashing to intergreen.
+int evacuationClearance(GId gid, int maxIg, const GConfig& cfg);
+
 GTransition computeTransition(const GPhase& from, const GPhase& to,
                               const GConfig& cfg);
 
