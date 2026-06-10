@@ -23,7 +23,7 @@ class ExitItem : public QGraphicsItem {
     QRectF bounds_;
     std::vector<QPointF> lanePoints_;
 
-    inline static const QPen exitPen_{QColor("#cc8878"), 0.3};
+    inline static const QPen exitPen_{QColor("#ba3838"), 0.3};
     static constexpr qreal handleRadius_ = 1.0;
     static constexpr qreal handleArrowLength_ = 3.0;
     static constexpr qreal lanePointSize_ = 0.4;

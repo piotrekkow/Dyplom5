@@ -24,9 +24,9 @@ class CrosswalkItem : public QGraphicsItem {
     QLineF split_;
     QLineF l2_;
 
-    inline static const QPen line1Pen_{QColor("#3669a7"), 0.2};
-    inline static const QPen splitPen_{QColor("#3669a7"), 0.2, Qt::DotLine};
-    inline static const QPen line2Pen_{QColor("#3b4a85"), 0.2};
+    inline static const QPen line1Pen_{QColor("#004faf"), 0.3};
+    inline static const QPen splitPen_{QColor("#2888ff"), 0.3, Qt::DotLine};
+    inline static const QPen line2Pen_{QColor("#6f81c8"), 0.3};
 
     void recomputeBounds();
 };
