@@ -9,13 +9,13 @@
 
 class CrosswalkSignalGroup {
    public:
-    CrosswalkSignalGroup(NodeId at, std::vector<CrosswalkId> crosswalks,
-                         int intervalMin)
-        : at_(at),
+    CrosswalkSignalGroup(SignalConfigId config,
+                         std::vector<CrosswalkId> crosswalks, int intervalMin)
+        : config_(config),
           crosswalks_(std::move(crosswalks)),
           intervalMin_(intervalMin) {}
 
-    [[nodiscard]] NodeId at() const { return at_; }
+    [[nodiscard]] SignalConfigId config() const { return config_; }
     [[nodiscard]] const std::vector<CrosswalkId>& crosswalks() const {
         return crosswalks_;
     }
@@ -36,23 +36,23 @@ class CrosswalkSignalGroup {
     }
 
    private:
-    NodeId at_;
+    SignalConfigId config_;
     std::vector<CrosswalkId> crosswalks_;
     int intervalMin_;
 };
 
 class MovementSignalGroup {
    public:
-    MovementSignalGroup(NodeId at, std::vector<ClusterId> clusters,
+    MovementSignalGroup(SignalConfigId config, std::vector<ClusterId> clusters,
                         std::vector<MovementId> movements, bool isProtected,
                         int intervalMin)
-        : at_(at),
+        : config_(config),
           clusters_(std::move(clusters)),
           movements_(std::move(movements)),
           isProtected_(isProtected),
           intervalMin_(intervalMin) {}
 
-    [[nodiscard]] NodeId at() const { return at_; }
+    [[nodiscard]] SignalConfigId config() const { return config_; }
     [[nodiscard]] const std::vector<ClusterId>& clusters() const {
         return clusters_;
     }
@@ -75,7 +75,7 @@ class MovementSignalGroup {
     }
 
    private:
-    NodeId at_;
+    SignalConfigId config_;
     std::vector<ClusterId> clusters_;
     std::vector<MovementId> movements_;
     bool isProtected_;
@@ -84,11 +84,11 @@ class MovementSignalGroup {
 
 class ConditionalTurnArrowSignalGroup {
    public:
-    ConditionalTurnArrowSignalGroup(NodeId at, MovementId movement,
+    ConditionalTurnArrowSignalGroup(SignalConfigId config, MovementId movement,
                                     int intervalMin)
-        : at_(at), movement_(movement), intervalMin_(intervalMin) {}
+        : config_(config), movement_(movement), intervalMin_(intervalMin) {}
 
-    [[nodiscard]] NodeId at() const { return at_; }
+    [[nodiscard]] SignalConfigId config() const { return config_; }
     [[nodiscard]] MovementId movement() const { return movement_; }
     [[nodiscard]] std::vector<StreamId> streams() const {
         return {static_cast<StreamId>(movement_)};
@@ -108,7 +108,7 @@ class ConditionalTurnArrowSignalGroup {
     }
 
    private:
-    NodeId at_;
+    SignalConfigId config_;
     MovementId movement_;
     int intervalMin_;
 };

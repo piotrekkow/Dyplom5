@@ -16,7 +16,7 @@
 #include "phase_cover.hpp"
 #include "phase_generator.hpp"
 #include "phase_sequence.hpp"
-#include "road_network/signal/data/sequence.hpp"
+#include "road_network/control/data/sequence.hpp"
 #include "types.hpp"
 
 namespace {

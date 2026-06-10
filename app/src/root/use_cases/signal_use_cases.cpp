@@ -7,33 +7,55 @@
 #include "root/command_stack.hpp"
 #include "root/editor/signal_editor.hpp"
 
-SignalUseCases::SignalUseCases(SignalEditor& editor, CommandStack& cmdStack)
-    : editor_(editor), cmdStack_(cmdStack) {}
+SignalUseCases::SignalUseCases(SignalEditor& editor, EditorContext& ec,
+                               CommandStack& cmdStack)
+    : editor_(editor), ec_(ec), cmdStack_(cmdStack) {}
 
-SignalGroupId SignalUseCases::addMovementGroup(NodeId at,
+SignalConfigId SignalUseCases::createConfig(NodeId at, std::string name) {
+    Transaction tx;
+    auto id = editor_.createConfigTx(tx, at, std::move(name));
+    cmdStack_.push(tx.commit());
+    return id;
+}
+
+void SignalUseCases::renameConfig(SignalConfigId id, std::string name) {
+    Transaction tx;
+    editor_.renameConfigTx(tx, id, std::move(name));
+    cmdStack_.push(tx.commit());
+}
+
+void SignalUseCases::removeConfig(SignalConfigId id) {
+    Transaction tx;
+    ec_.removeSignalConfigTx(tx, id);
+    cmdStack_.push(tx.commit());
+}
+
+SignalGroupId SignalUseCases::addMovementGroup(SignalConfigId config,
                                                std::vector<ClusterId> clusters,
                                                bool isProtected,
                                                int intervalMin) {
     Transaction tx;
-    auto id = editor_.addMovementGroupTx(tx, at, std::move(clusters),
-                                         isProtected, intervalMin);
+    auto id = ec_.addMovementGroupTx(tx, config, std::move(clusters),
+                                     isProtected, intervalMin);
     cmdStack_.push(tx.commit());
     return id;
 }
 
 SignalGroupId SignalUseCases::addCrosswalkGroup(
-    NodeId at, std::vector<CrosswalkId> crosswalks, int intervalMin) {
+    SignalConfigId config, std::vector<CrosswalkId> crosswalks,
+    int intervalMin) {
     Transaction tx;
-    auto id =
-        editor_.addCrosswalkGroupTx(tx, at, std::move(crosswalks), intervalMin);
+    auto id = ec_.addCrosswalkGroupTx(tx, config, std::move(crosswalks),
+                                      intervalMin);
     cmdStack_.push(tx.commit());
     return id;
 }
 
-SignalGroupId SignalUseCases::addTurnArrowGroup(NodeId at, MovementId movement,
+SignalGroupId SignalUseCases::addTurnArrowGroup(SignalConfigId config,
+                                                MovementId movement,
                                                 int intervalMin) {
     Transaction tx;
-    auto id = editor_.addTurnArrowGroupTx(tx, at, movement, intervalMin);
+    auto id = ec_.addTurnArrowGroupTx(tx, config, movement, intervalMin);
     cmdStack_.push(tx.commit());
     return id;
 }
@@ -52,45 +74,8 @@ void SignalUseCases::setProtected(SignalGroupId id, bool isProtected) {
 
 void SignalUseCases::removeSignalGroup(SignalGroupId id) {
     Transaction tx;
-    editor_.removeSignalGroupTx(tx, id);
+    ec_.removeSignalGroupTx(tx, id);
     cmdStack_.push(tx.commit());
-}
-
-TimingId SignalUseCases::createTiming(NodeId at, int cycleLength) {
-    Transaction tx;
-    auto id = editor_.createTimingTx(tx, at, cycleLength);
-    cmdStack_.push(tx.commit());
-    return id;
-}
-
-void SignalUseCases::removeTiming(TimingId id) {
-    Transaction tx;
-    editor_.removeTimingTx(tx, id);
-    cmdStack_.push(tx.commit());
-}
-
-void SignalUseCases::setAlwaysActive(TimingId timingId, SignalGroupId sgId) {
-    Transaction tx;
-    editor_.setAlwaysActiveTx(tx, timingId, sgId);
-    cmdStack_.push(tx.commit());
-}
-
-std::expected<void, TimingError> SignalUseCases::setIntervals(
-    TimingId timingId, SignalGroupId sgId, std::vector<Interval> intervals) {
-    Transaction tx;
-    auto res = editor_.setIntervalsTx(tx, timingId, sgId, std::move(intervals));
-    if (!res) return res;
-    cmdStack_.push(tx.commit());
-    return {};
-}
-
-std::expected<void, TimingWarning> SignalUseCases::setMinIntervalLength(
-    TimingId timingId, SignalGroupId sgId, int min) {
-    Transaction tx;
-    auto res = editor_.setMinIntervalLengthTx(tx, timingId, sgId, min);
-    if (!res) return res;
-    cmdStack_.push(tx.commit());
-    return {};
 }
 
 // for debug print purposes
@@ -106,11 +91,11 @@ static QString formatDuration(std::chrono::steady_clock::duration duration) {
 }
 }  // namespace
 
-std::optional<TimingId> SignalUseCases::runOptimizer(NodeId at,
-                                                     int cycleLength) {
+std::optional<EditorContext::OptimizerRunResult> SignalUseCases::runOptimizer(
+    NodeId at, int cycleLength) {
     Transaction tx;
     auto start = std::chrono::steady_clock::now();
-    auto result = editor_.runOptimizerTx(tx, at, cycleLength);
+    auto result = ec_.runOptimizerTx(tx, at, cycleLength);
 
     auto end = std::chrono::steady_clock::now();
     QString status =

@@ -8,15 +8,16 @@
 
 namespace signal_compute {
 IntergreenMatrix intergreenMatrix(const GraphDerived& graphDerived,
-                                  const SignalData& signal, NodeId id) {
+                                  const SignalData& signal,
+                                  SignalConfigId id) {
     IntergreenMatrix result;
-    const auto* nodeSig = signal.nodeSignals().get(id);
-    if (!nodeSig) return result;
-    auto& groups = nodeSig->signalGroups;
-    const int n = static_cast<int>(groups.size());
+    const auto* cfg = signal.configs().get(id);
+    if (!cfg) return result;
+    const auto& groups = cfg->signalGroups();
+    NodeId node = cfg->at();
 
-    const auto* permMap = graphDerived.streamPermitted().get(id);
-    const auto* igMap = graphDerived.streamIntergreen().get(id);
+    const auto* permMap = graphDerived.streamPermitted().get(node);
+    const auto* igMap = graphDerived.streamIntergreen().get(node);
     if (!permMap || !igMap) return result;
 
     auto permitted = [&](StreamId a, StreamId b) {

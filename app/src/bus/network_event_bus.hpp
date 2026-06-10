@@ -43,10 +43,15 @@ struct NetworkEventBus {
     EventBus<StreamIntergreenOverrideChanged> streamIntergreenOverrideChanged;
     EventBus<StreamIntergreenOverrideErased> streamIntergreenOverrideErased;
 
+    EventBus<SignalConfigCreated> signalConfigCreated;
+    EventBus<SignalConfigRemoved> signalConfigRemoved;
+    EventBus<SignalConfigRenamed> signalConfigRenamed;
+
     EventBus<SignalGroupCreated> signalGroupCreated;
     EventBus<SignalGroupRemoved> signalGroupRemoved;
     EventBus<SignalGroupChanged> signalGroupChanged;
 
+    // control domain
     EventBus<TimingCreated> timingCreated;
     EventBus<TimingRemoved> timingRemoved;
 

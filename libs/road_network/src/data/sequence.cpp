@@ -1,9 +1,9 @@
-#include "road_network/signal/data/sequence.hpp"
+#include "road_network/control/data/sequence.hpp"
 
 #include <algorithm>
 #include <expected>
 
-#include "road_network/signal/signal_errors.hpp"
+#include "road_network/control/control_errors.hpp"
 
 std::expected<void, TimingWarning> SignalSequence::setMinIntervalLength(
     int min) {

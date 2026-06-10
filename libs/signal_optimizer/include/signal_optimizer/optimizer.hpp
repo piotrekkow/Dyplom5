@@ -3,7 +3,7 @@
 #include <optional>
 #include <road_network/demand.hpp>
 #include <road_network/graph.hpp>
-#include <road_network/signal/data/sequence.hpp>
+#include <road_network/control/data/sequence.hpp>
 #include <road_network/util/ids.hpp>
 #include <vector>
 

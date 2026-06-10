@@ -1,11 +1,11 @@
-#include "road_network/signal/data/timing.hpp"
+#include "road_network/control/data/timing.hpp"
 
 #include <algorithm>
 #include <expected>
 #include <variant>
 
-#include "road_network/signal/data/sequence.hpp"
-#include "road_network/signal/signal_errors.hpp"
+#include "road_network/control/data/sequence.hpp"
+#include "road_network/control/control_errors.hpp"
 
 namespace {
 bool intervalsFitCycle(const std::vector<Interval>& intervals,

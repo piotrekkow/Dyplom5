@@ -1,71 +1,51 @@
 #pragma once
 
-#include <expected>
-#include <optional>
 #include <road_network/signal.hpp>
-#include <road_network/signal/data/interval.hpp>
-#include <road_network/signal/signal_errors.hpp>
 #include <road_network/util/ids.hpp>
-#include <signal_optimizer/optimizer.hpp>
+#include <string>
 #include <vector>
 
 class Graph;
-class Demand;
 class NetworkEventBus;
 class Transaction;
 
 class SignalEditor {
    public:
-    SignalEditor(Signal& signal, const Graph& graph, const Demand& demand,
-                 NetworkEventBus& bus);
+    SignalEditor(Signal& signal, const Graph& graph, NetworkEventBus& bus);
+
+    // Config Tx
+    SignalConfigId createConfigTx(Transaction& tx, NodeId at, std::string name);
+    void renameConfigTx(Transaction& tx, SignalConfigId id, std::string name);
 
     // Signal group Tx
-    SignalGroupId addMovementGroupTx(Transaction& tx, NodeId at,
+    SignalGroupId addMovementGroupTx(Transaction& tx, SignalConfigId config,
                                      std::vector<ClusterId> clusters,
                                      bool isProtected, int intervalMin);
-    SignalGroupId addCrosswalkGroupTx(Transaction& tx, NodeId at,
+    SignalGroupId addCrosswalkGroupTx(Transaction& tx, SignalConfigId config,
                                       std::vector<CrosswalkId> crosswalks,
                                       int intervalMin);
-    SignalGroupId addTurnArrowGroupTx(Transaction& tx, NodeId at,
+    SignalGroupId addTurnArrowGroupTx(Transaction& tx, SignalConfigId config,
                                       MovementId movement, int intervalMin);
     void setIntervalMinTx(Transaction& tx, SignalGroupId id, int min);
     void setProtectedTx(Transaction& tx, SignalGroupId id, bool isProtected);
+
+    // Tx halves of cross-domain cascades — called only by EditorContext,
+    // which cleans the control domain first
     void removeSignalGroupTx(Transaction& tx, SignalGroupId id);
+    void removeConfigTx(Transaction& tx, SignalConfigId id);
 
-    // Timing lifecycle Tx
-    TimingId createTimingTx(Transaction& tx, NodeId at, int cycleLength);
-    void removeTimingTx(Transaction& tx, TimingId id);
-
-    // Sequence Tx
-    void setAlwaysActiveTx(Transaction& tx, TimingId timingId,
-                           SignalGroupId sgId);
-    std::expected<void, TimingError> setIntervalsTx(
-        Transaction& tx, TimingId timingId, SignalGroupId sgId,
-        std::vector<Interval> intervals);
-    std::expected<void, TimingWarning> setMinIntervalLengthTx(
-        Transaction& tx, TimingId timingId, SignalGroupId sgId, int min);
-
-    // Optimizer Tx
-    std::optional<TimingId> runOptimizerTx(Transaction& tx, NodeId at,
-                                           int cycleLength);
-
-    // Tx variants for EditorContext cross-system cascade
-    void removeNodeSignalsTx(Transaction& tx, NodeId id);
-    void onEntryLayoutClearedTx(Transaction& tx, NodeId at,
-                                const std::vector<ClusterId>& clusters,
-                                const std::vector<MovementId>& movements);
-    void onCrosswalkRemovedTx(Transaction& tx, CrosswalkId id, NodeId at);
+    // const queries for EditorContext cascade decisions
+    [[nodiscard]] std::vector<SignalConfigId> configsAt(NodeId id) const;
+    [[nodiscard]] std::vector<SignalGroupId> groupsReferencing(
+        NodeId at, const std::vector<ClusterId>& clusters,
+        const std::vector<MovementId>& movements) const;
+    [[nodiscard]] std::vector<SignalGroupId> groupsReferencingCrosswalk(
+        NodeId at, CrosswalkId id) const;
 
    private:
     Signal& signal_;
     const Graph& graph_;
-    const Demand& demand_;
     NetworkEventBus& bus_;
 
-    SignalGroupId addSignalGroupTx(Transaction& tx,
-                                   Signal::EntityMutation<SignalGroupId> mut);
-    void createSequenceTx(Transaction& tx, TimingId timingId,
-                          SignalGroupId sgId, int minIntervalLength, NodeId at);
-    void removeSequenceTx(Transaction& tx, TimingId timingId,
-                          SignalGroupId sgId, NodeId at);
+    SignalGroupId addSignalGroupTx(Transaction& tx, Signal::GroupMutation mut);
 };

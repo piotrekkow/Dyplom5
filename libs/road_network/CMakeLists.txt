@@ -2,6 +2,7 @@ add_library(road_network_lib
     src/graph.cpp
     src/demand.cpp
     src/signal.cpp
+    src/control.cpp
 
     src/util/geometry/line.cpp
     src/util/geometry/polyline.cpp

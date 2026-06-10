@@ -4,7 +4,7 @@
 #include <variant>
 #include <vector>
 
-#include "../signal_errors.hpp"
+#include "../control_errors.hpp"
 #include "interval.hpp"
 
 class SignalSequence {

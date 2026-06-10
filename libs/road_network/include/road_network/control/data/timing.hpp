@@ -5,13 +5,14 @@
 
 class Timing {
    public:
-    Timing(NodeId at, int cycleLength) : at_(at), cycleLength_(cycleLength) {}
+    Timing(SignalConfigId at, int cycleLength)
+        : at_(at), cycleLength_(cycleLength) {}
 
     [[nodiscard]] const Sequence& sequence(SignalGroupId sg) const {
         return sequences_.at(sg);
     }
     [[nodiscard]] int cycleLength() const { return cycleLength_; }
-    [[nodiscard]] NodeId at() const { return at_; }
+    [[nodiscard]] SignalConfigId at() const { return at_; }
 
     std::expected<void, TimingError> setCycleLength(int t);
     void createNewSequence(SignalGroupId sg, int minIntervalLength);
@@ -32,7 +33,7 @@ class Timing {
     }
 
    private:
-    NodeId at_;
+    SignalConfigId at_;
     std::unordered_map<SignalGroupId, Sequence> sequences_{};
     int cycleLength_;
 };

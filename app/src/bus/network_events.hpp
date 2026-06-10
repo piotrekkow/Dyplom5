@@ -117,30 +117,47 @@ struct StreamIntergreenOverrideErased {
     NodeId at;
 };
 
+struct SignalConfigCreated {
+    SignalConfigId id;
+    NodeId at;
+};
+struct SignalConfigRemoved {
+    SignalConfigId id;
+    NodeId at;
+};
+struct SignalConfigRenamed {
+    SignalConfigId id;
+    NodeId at;
+};
+
 struct SignalGroupCreated {
     SignalGroupId id;
+    SignalConfigId config;
     NodeId at;
 };
 struct SignalGroupRemoved {
     SignalGroupId id;
+    SignalConfigId config;
     NodeId at;
 };
 struct SignalGroupChanged {
     SignalGroupId id;
+    SignalConfigId config;
     NodeId at;
 };
 
+// control domain
 struct TimingCreated {
     TimingId id;
-    NodeId at;
+    SignalConfigId config;
 };
 struct TimingRemoved {
     TimingId id;
-    NodeId at;
+    SignalConfigId config;
 };
 
 struct SequenceChanged {
     TimingId timingId;
     SignalGroupId sgId;
-    NodeId at;
+    SignalConfigId config;
 };

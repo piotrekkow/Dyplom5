@@ -5,10 +5,10 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
-#include <road_network/signal/data/sequence.hpp>
+#include <road_network/control/data/sequence.hpp>
+#include <road_network/control/data/timing.hpp>
 #include <road_network/signal/data/signal_aspect.hpp>
 #include <road_network/signal/data/signal_group.hpp>
-#include <road_network/signal/data/timing.hpp>
 #include <road_network/util/overloaded.hpp>
 #include <string>
 #include <vector>
@@ -190,14 +190,12 @@ std::string throughputGroupLabel(SignalGroupId sgId, const SignalGroup& sg,
     return sgLabel(sgId, sg) + (isProtected ? " [prot]" : " [perm]");
 }
 
-std::vector<ThroughputRow> buildThroughputRows(const NodeSignal& ns,
-                                               const Timing& timing,
-                                               const Signal& signal,
-                                               const Graph& graph,
-                                               const Demand& demand) {
+std::vector<ThroughputRow> buildThroughputRows(
+    const std::vector<SignalGroupId>& groups, const Timing& timing,
+    const Signal& signal, const Graph& graph, const Demand& demand) {
     std::vector<ThroughputRow> rows;
 
-    for (SignalGroupId sgId : ns.signalGroups) {
+    for (SignalGroupId sgId : groups) {
         if (!timing.hasSequence(sgId)) continue;
 
         const SignalGroup* sg = signal.data().signalGroups().get(sgId);
@@ -438,25 +436,30 @@ void streamIntergreen(NodeId node, const Graph& graph) {
         });
 }
 
-void nodeTimings(NodeId node, const Signal& signal, const Graph& graph,
-                 const Demand& demand) {
-    const auto* ns = signal.data().nodeSignals().get(node);
-    if (!ns || ns->timings.empty()) {
-        std::cerr << "[signal_debug] no timings at node " << node.index()
+namespace {
+
+void configTimings(SignalConfigId configId, const Signal& signal,
+                   const Control& control, const Graph& graph,
+                   const Demand& demand) {
+    const auto* cfg = signal.data().configs().get(configId);
+    const auto* cc = control.data().configControls().get(configId);
+    if (!cfg || !cc || cc->timings.empty()) {
+        std::cerr << "[signal_debug] no timings at config " << configId.index()
                   << "\n";
         return;
     }
 
-    for (TimingId timingId : ns->timings) {
-        const Timing* timing = signal.data().timings().get(timingId);
+    for (TimingId timingId : cc->timings) {
+        const Timing* timing = control.data().timings().get(timingId);
         if (!timing) continue;
         const int T = timing->cycleLength();
 
-        std::cout << "=== Timing " << timingId.index() << "  (node "
-                  << node.index() << ", T=" << T << "s) ===\n";
+        std::cout << "=== Timing " << timingId.index() << "  (config "
+                  << configId.index() << ", node " << cfg->at().index()
+                  << ", T=" << T << "s) ===\n";
 
         int lw = 4;
-        for (SignalGroupId sgId : ns->signalGroups) {
+        for (SignalGroupId sgId : cfg->signalGroups()) {
             if (!timing->hasSequence(sgId)) continue;
             const SignalGroup* sg = signal.data().signalGroups().get(sgId);
             if (sg)
@@ -466,7 +469,7 @@ void nodeTimings(NodeId node, const Signal& signal, const Graph& graph,
 
         printRuler(lw, T);
 
-        const auto& sgs = ns->signalGroups;
+        const auto& sgs = cfg->signalGroups();
         for (int gi = 0; gi < static_cast<int>(sgs.size()); ++gi) {
             SignalGroupId sgId = sgs[static_cast<size_t>(gi)];
             if (!timing->hasSequence(sgId)) continue;
@@ -509,15 +512,32 @@ void nodeTimings(NodeId node, const Signal& signal, const Graph& graph,
         printRuler(lw, T);
         std::cout << "\n";
 
-        auto rows = buildThroughputRows(*ns, *timing, signal, graph, demand);
+        auto rows = buildThroughputRows(cfg->signalGroups(), *timing, signal,
+                                        graph, demand);
         printThroughputTable(rows);
     }
 }
-void intergreenMatrix(NodeId node, const Signal& signal) {
-    const auto* igm = signal.derived().intergreenMatrix().get(node);
+
+}  // namespace
+
+void nodeTimings(NodeId node, const Signal& signal, const Control& control,
+                 const Graph& graph, const Demand& demand) {
+    const auto* ns = signal.data().nodeSignals().get(node);
+    if (!ns || ns->configs.empty()) {
+        std::cerr << "[signal_debug] no signal configs at node " << node.index()
+                  << "\n";
+        return;
+    }
+
+    for (SignalConfigId configId : ns->configs)
+        configTimings(configId, signal, control, graph, demand);
+}
+
+void intergreenMatrix(SignalConfigId config, const Signal& signal) {
+    const auto* igm = signal.derived().intergreenMatrix().get(config);
     if (!igm) {
-        std::cerr << "[signal_debug] no intergreen matrix at node "
-                  << node.index() << "\n";
+        std::cerr << "[signal_debug] no intergreen matrix at config "
+                  << config.index() << "\n";
         return;
     }
 
@@ -544,7 +564,7 @@ void intergreenMatrix(NodeId node, const Signal& signal) {
 
     const std::string pad(static_cast<size_t>(cw), ' ');
 
-    std::cout << "=== IntergreenMatrix  node " << node.index() << " ===\n";
+    std::cout << "=== IntergreenMatrix  config " << config.index() << " ===\n";
 
     // Header
     std::cout << pad;

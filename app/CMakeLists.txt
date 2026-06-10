@@ -14,10 +14,12 @@ add_executable(Dyplom5
     src/root/editor/graph_editor.cpp
     src/root/editor/demand_editor.cpp
     src/root/editor/signal_editor.cpp
+    src/root/editor/control_editor.cpp
 
     src/root/use_cases/graph_use_cases.cpp
     src/root/use_cases/demand_use_cases.cpp
     src/root/use_cases/signal_use_cases.cpp
+    src/root/use_cases/control_use_cases.cpp
 
     src/signal_debug.cpp
 

@@ -6,14 +6,14 @@
 
 class SignalDerived {
    public:
-    [[nodiscard]] const SlotArray<NodeTag, IntergreenMatrix>& intergreenMatrix()
-        const {
+    [[nodiscard]] const SlotArray<SignalConfigTag, IntergreenMatrix>&
+    intergreenMatrix() const {
         return intergreenMatrix_;
     }
-    SlotArray<NodeTag, IntergreenMatrix>& intergreenMatrix() {
+    SlotArray<SignalConfigTag, IntergreenMatrix>& intergreenMatrix() {
         return intergreenMatrix_;
     }
 
    private:
-    SlotArray<NodeTag, IntergreenMatrix> intergreenMatrix_;
+    SlotArray<SignalConfigTag, IntergreenMatrix> intergreenMatrix_;
 };

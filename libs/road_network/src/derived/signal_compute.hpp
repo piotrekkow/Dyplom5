@@ -7,5 +7,5 @@ class SignalData;
 
 namespace signal_compute {
 IntergreenMatrix intergreenMatrix(const GraphDerived& graphDerived,
-                                  const SignalData& signal, NodeId id);
+                                  const SignalData& signal, SignalConfigId id);
 };
