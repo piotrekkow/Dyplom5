@@ -43,6 +43,10 @@ struct NetworkEventBus {
     EventBus<StreamIntergreenOverrideChanged> streamIntergreenOverrideChanged;
     EventBus<StreamIntergreenOverrideErased> streamIntergreenOverrideErased;
 
+    EventBus<IntersectionCreated> intersectionCreated;
+    EventBus<IntersectionRemoved> intersectionRemoved;
+    EventBus<IntersectionNodesChanged> intersectionNodesChanged;
+
     EventBus<SignalConfigCreated> signalConfigCreated;
     EventBus<SignalConfigRemoved> signalConfigRemoved;
     EventBus<SignalConfigRenamed> signalConfigRenamed;

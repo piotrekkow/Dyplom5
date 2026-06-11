@@ -205,11 +205,13 @@ void Application::show() {
     debug_print::streamPermitted(n1, document_->graph());
     debug_print::streamIntergreen(n1, document_->graph());
 
-    auto run = s.runOptimizer(n1, 120);
+    auto i1 = s.createIntersection({n1}, "demo");
+    auto run = s.runOptimizer(i1, 120);
 
     debug_print::intergreenMatrix(run->configId, document_->signal());
-    debug_print::nodeTimings(n1, document_->signal(), document_->control(),
-                             document_->graph(), document_->demand());
+    debug_print::intersectionTimings(i1, document_->signal(),
+                                     document_->control(), document_->graph(),
+                                     document_->demand());
 
     // MANUAL IMPROVEMENT
     const auto& groups =
@@ -229,6 +231,7 @@ void Application::show() {
     if (!i5) qDebug() << "no i5";
     if (!i10) qDebug() << "no i10";
     if (!i7) qDebug() << "no i7";
-    debug_print::nodeTimings(n1, document_->signal(), document_->control(),
-                             document_->graph(), document_->demand());
+    debug_print::intersectionTimings(i1, document_->signal(),
+                                     document_->control(), document_->graph(),
+                                     document_->demand());
 }

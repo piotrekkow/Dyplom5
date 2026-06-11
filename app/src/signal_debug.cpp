@@ -455,7 +455,7 @@ void configTimings(SignalConfigId configId, const Signal& signal,
         const int T = timing->cycleLength();
 
         std::cout << "=== Timing " << timingId.index() << "  (config "
-                  << configId.index() << ", node " << cfg->at().index()
+                  << configId.index() << ", intersection " << cfg->at().index()
                   << ", T=" << T << "s) ===\n";
 
         int lw = 4;
@@ -520,16 +520,17 @@ void configTimings(SignalConfigId configId, const Signal& signal,
 
 }  // namespace
 
-void nodeTimings(NodeId node, const Signal& signal, const Control& control,
-                 const Graph& graph, const Demand& demand) {
-    const auto* ns = signal.data().nodeSignals().get(node);
-    if (!ns || ns->configs.empty()) {
-        std::cerr << "[signal_debug] no signal configs at node " << node.index()
-                  << "\n";
+void intersectionTimings(IntersectionId intersection, const Signal& signal,
+                         const Control& control, const Graph& graph,
+                         const Demand& demand) {
+    const auto* in = signal.data().intersections().get(intersection);
+    if (!in || in->configs().empty()) {
+        std::cerr << "[signal_debug] no signal configs at intersection "
+                  << intersection.index() << "\n";
         return;
     }
 
-    for (SignalConfigId configId : ns->configs)
+    for (SignalConfigId configId : in->configs())
         configTimings(configId, signal, control, graph, demand);
 }
 

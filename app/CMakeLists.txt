@@ -28,7 +28,7 @@ add_executable(Dyplom5
     src/ui/network/network_scene.cpp
     src/ui/network/network_view.cpp
     src/ui/network/network_scene_populator.cpp
-    
+
     src/ui/network/items/node_item.cpp
     src/ui/network/items/entry_item.cpp
     src/ui/network/items/exit_item.cpp
@@ -36,6 +36,7 @@ add_executable(Dyplom5
     src/ui/network/items/crosswalk_series_item.cpp
     src/ui/network/items/crosswalk_item.cpp
     src/ui/network/items/signal_group_item.cpp
+    src/ui/network/items/intersection_item.cpp
 )
 
 target_include_directories(Dyplom5 PRIVATE src)

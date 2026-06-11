@@ -11,3 +11,4 @@
 *.md
 *.sh
 *.ts
+/mockup/

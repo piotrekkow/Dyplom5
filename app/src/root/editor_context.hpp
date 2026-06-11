@@ -56,12 +56,16 @@ class EditorContext {
                                       MovementId movement, int intervalMin);
     void removeSignalGroupTx(Transaction& tx, SignalGroupId id);
     void removeSignalConfigTx(Transaction& tx, SignalConfigId id);
+    void removeIntersectionTx(Transaction& tx, IntersectionId id);
 
     struct OptimizerRunResult {
         SignalConfigId configId;
         TimingId timingId;
     };
-    std::optional<OptimizerRunResult> runOptimizerTx(Transaction& tx, NodeId at,
+    // Only single-node intersections are supported for now; returns nullopt
+    // for multi-node ones.
+    std::optional<OptimizerRunResult> runOptimizerTx(Transaction& tx,
+                                                     IntersectionId at,
                                                      int cycleLength);
 
    private:

@@ -16,10 +16,55 @@ SignalEditor::SignalEditor(Signal& signal, const Graph& graph,
     : signal_(signal), graph_(graph), bus_(bus) {}
 
 //
+//  INTERSECTION TX
+//
+
+IntersectionId SignalEditor::createIntersectionTx(
+    Transaction& tx, const std::vector<NodeId>& nodes, std::string name) {
+    auto mut = signal_.createIntersection(std::move(name));
+    IntersectionId id = mut.id;
+    tx.recordUndo(std::move(mut.undo), bus_.intersectionRemoved,
+                  IntersectionRemoved{id});
+    tx.recordEvent(bus_.intersectionCreated, IntersectionCreated{id});
+
+    for (NodeId node : nodes) addNodeToIntersectionTx(tx, id, node);
+    return id;
+}
+
+void SignalEditor::addNodeToIntersectionTx(Transaction& tx, IntersectionId id,
+                                           NodeId node) {
+    auto mut = signal_.addNode(id, node);
+    tx.recordUndo(std::move(mut.undo), bus_.intersectionNodesChanged,
+                  IntersectionNodesChanged{id});
+    tx.recordEvent(bus_.intersectionNodesChanged,
+                   IntersectionNodesChanged{id});
+}
+
+void SignalEditor::removeNodeFromIntersectionTx(Transaction& tx,
+                                                IntersectionId id,
+                                                NodeId node) {
+    auto mut = signal_.removeNode(id, node);
+    tx.recordUndo(std::move(mut.undo), bus_.intersectionNodesChanged,
+                  IntersectionNodesChanged{id});
+    tx.recordEvent(bus_.intersectionNodesChanged,
+                   IntersectionNodesChanged{id});
+}
+
+void SignalEditor::removeIntersectionTx(Transaction& tx, IntersectionId id) {
+    auto nodesCopy = signal_.data().intersections().get(id)->nodes();
+    for (NodeId node : nodesCopy) removeNodeFromIntersectionTx(tx, id, node);
+
+    auto mut = signal_.removeIntersection(id);
+    tx.recordUndo(std::move(mut.undo), bus_.intersectionCreated,
+                  IntersectionCreated{id});
+    tx.recordEvent(bus_.intersectionRemoved, IntersectionRemoved{id});
+}
+
+//
 //  CONFIG TX
 //
 
-SignalConfigId SignalEditor::createConfigTx(Transaction& tx, NodeId at,
+SignalConfigId SignalEditor::createConfigTx(Transaction& tx, IntersectionId at,
                                             std::string name) {
     auto mut = signal_.createConfig(at, std::move(name));
     SignalConfigId id = mut.id;
@@ -42,7 +87,7 @@ void SignalEditor::removeConfigTx(Transaction& tx, SignalConfigId id) {
     for (SignalGroupId sgId : sgsCopy) removeSignalGroupTx(tx, sgId);
 
     auto mut = signal_.removeConfig(id);
-    NodeId at = mut.at;
+    IntersectionId at = mut.at;
     tx.recordUndo(std::move(mut.undo), bus_.signalConfigCreated,
                   SignalConfigCreated{id, at});
     tx.recordEvent(bus_.signalConfigRemoved, SignalConfigRemoved{id, at});
@@ -122,17 +167,29 @@ void SignalEditor::removeSignalGroupTx(Transaction& tx, SignalGroupId id) {
 //  CONST QUERIES FOR EDITOR CONTEXT
 //
 
-std::vector<SignalConfigId> SignalEditor::configsAt(NodeId id) const {
-    const auto* ns = signal_.data().nodeSignals().get(id);
-    if (!ns) return {};
-    return ns->configs;
+std::optional<IntersectionId> SignalEditor::intersectionAt(NodeId id) const {
+    return signal_.data().intersectionAt(id);
 }
+
+std::vector<SignalConfigId> SignalEditor::configsOf(IntersectionId id) const {
+    const auto* in = signal_.data().intersections().get(id);
+    if (!in) return {};
+    return in->configs();
+}
+
+namespace {
+std::vector<SignalConfigId> configsAtNode(const Signal& signal, NodeId at) {
+    auto intersection = signal.data().intersectionAt(at);
+    if (!intersection) return {};
+    return signal.data().intersections().get(*intersection)->configs();
+}
+}  // namespace
 
 std::vector<SignalGroupId> SignalEditor::groupsReferencing(
     NodeId at, const std::vector<ClusterId>& clusters,
     const std::vector<MovementId>& movements) const {
     std::vector<SignalGroupId> result;
-    for (SignalConfigId cfgId : configsAt(at)) {
+    for (SignalConfigId cfgId : configsAtNode(signal_, at)) {
         const auto* cfg = signal_.data().configs().get(cfgId);
         for (SignalGroupId sgId : cfg->signalGroups()) {
             const auto* sg = signal_.data().signalGroups().get(sgId);
@@ -159,7 +216,7 @@ std::vector<SignalGroupId> SignalEditor::groupsReferencing(
 std::vector<SignalGroupId> SignalEditor::groupsReferencingCrosswalk(
     NodeId at, CrosswalkId id) const {
     std::vector<SignalGroupId> result;
-    for (SignalConfigId cfgId : configsAt(at)) {
+    for (SignalConfigId cfgId : configsAtNode(signal_, at)) {
         const auto* cfg = signal_.data().configs().get(cfgId);
         for (SignalGroupId sgId : cfg->signalGroups()) {
             const auto* sg = signal_.data().signalGroups().get(sgId);

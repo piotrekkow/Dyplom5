@@ -15,7 +15,14 @@ class SignalUseCases {
     SignalUseCases(SignalEditor& editor, EditorContext& ec,
                    CommandStack& cmdStack);
 
-    SignalConfigId createConfig(NodeId at, std::string name);
+    // pre: every node is alive and not part of another intersection
+    IntersectionId createIntersection(const std::vector<NodeId>& nodes,
+                                      std::string name);
+    void removeIntersection(IntersectionId id);
+    void addNodeToIntersection(IntersectionId id, NodeId node);
+    void removeNodeFromIntersection(IntersectionId id, NodeId node);
+
+    SignalConfigId createConfig(IntersectionId at, std::string name);
     void renameConfig(SignalConfigId id, std::string name);
     void removeConfig(SignalConfigId id);
 
@@ -32,8 +39,9 @@ class SignalUseCases {
     void setProtected(SignalGroupId id, bool isProtected);
     void removeSignalGroup(SignalGroupId id);
 
+    // only single-node intersections are supported for now
     std::optional<EditorContext::OptimizerRunResult> runOptimizer(
-        NodeId at, int cycleLength);
+        IntersectionId at, int cycleLength);
 
    private:
     SignalEditor& editor_;

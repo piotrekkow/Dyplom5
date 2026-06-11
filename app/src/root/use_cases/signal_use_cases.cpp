@@ -11,7 +11,35 @@ SignalUseCases::SignalUseCases(SignalEditor& editor, EditorContext& ec,
                                CommandStack& cmdStack)
     : editor_(editor), ec_(ec), cmdStack_(cmdStack) {}
 
-SignalConfigId SignalUseCases::createConfig(NodeId at, std::string name) {
+IntersectionId SignalUseCases::createIntersection(
+    const std::vector<NodeId>& nodes, std::string name) {
+    Transaction tx;
+    auto id = editor_.createIntersectionTx(tx, nodes, std::move(name));
+    cmdStack_.push(tx.commit());
+    return id;
+}
+
+void SignalUseCases::removeIntersection(IntersectionId id) {
+    Transaction tx;
+    ec_.removeIntersectionTx(tx, id);
+    cmdStack_.push(tx.commit());
+}
+
+void SignalUseCases::addNodeToIntersection(IntersectionId id, NodeId node) {
+    Transaction tx;
+    editor_.addNodeToIntersectionTx(tx, id, node);
+    cmdStack_.push(tx.commit());
+}
+
+void SignalUseCases::removeNodeFromIntersection(IntersectionId id,
+                                                NodeId node) {
+    Transaction tx;
+    editor_.removeNodeFromIntersectionTx(tx, id, node);
+    cmdStack_.push(tx.commit());
+}
+
+SignalConfigId SignalUseCases::createConfig(IntersectionId at,
+                                            std::string name) {
     Transaction tx;
     auto id = editor_.createConfigTx(tx, at, std::move(name));
     cmdStack_.push(tx.commit());
@@ -92,7 +120,7 @@ static QString formatDuration(std::chrono::steady_clock::duration duration) {
 }  // namespace
 
 std::optional<EditorContext::OptimizerRunResult> SignalUseCases::runOptimizer(
-    NodeId at, int cycleLength) {
+    IntersectionId at, int cycleLength) {
     Transaction tx;
     auto start = std::chrono::steady_clock::now();
     auto result = ec_.runOptimizerTx(tx, at, cycleLength);

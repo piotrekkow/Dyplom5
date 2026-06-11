@@ -9,16 +9,13 @@
 
 namespace {
 
-void registerConfig(SignalData& data, NodeId nodeId, SignalConfigId id) {
-    if (!data.nodeSignals().get(nodeId)) data.nodeSignals().set(nodeId, {});
-    data.nodeSignals().get(nodeId)->configs.push_back(id);
+void registerConfig(SignalData& data, IntersectionId at, SignalConfigId id) {
+    data.intersections().get(at)->configs().push_back(id);
 }
 
-void unregisterConfig(SignalData& data, NodeId nodeId, SignalConfigId id) {
-    if (auto* ns = data.nodeSignals().get(nodeId)) {
-        auto& cfgs = ns->configs;
-        cfgs.erase(std::ranges::find(cfgs, id));
-    }
+void unregisterConfig(SignalData& data, IntersectionId at, SignalConfigId id) {
+    auto& cfgs = data.intersections().get(at)->configs();
+    cfgs.erase(std::ranges::find(cfgs, id));
 }
 
 void registerSg(SignalData& data, SignalConfigId configId, SignalGroupId id) {
@@ -33,10 +30,63 @@ void unregisterSg(SignalData& data, SignalConfigId configId, SignalGroupId id) {
 }  // namespace
 
 //
+//  INTERSECTION LIFECYCLE
+//
+
+Signal::IntersectionMutation Signal::createIntersection(std::string name) {
+    auto id = data_.intersections().emplace(std::move(name));
+    return {.id = id, .undo = [this, id] {
+                data_.intersections().release(data_.intersections().vacate(id));
+            }};
+}
+
+Signal::IntersectionMutation Signal::removeIntersection(IntersectionId id) {
+    assert(data_.intersections().alive(id));
+    assert(data_.intersections().get(id)->configs().empty() &&
+           "remove an intersection's configs before removing it");
+    assert(data_.intersections().get(id)->nodes().empty() &&
+           "detach an intersection's nodes before removing it");
+    auto vs = data_.intersections().vacate(id);
+    return {.id = id, .undo = [this, vs = std::move(vs)] mutable {
+                data_.intersections().reinsert(std::move(vs));
+            }};
+}
+
+Signal::IntersectionMutation Signal::addNode(IntersectionId id, NodeId node) {
+    assert(data_.intersections().alive(id));
+    assert(!data_.intersectionAt(node) &&
+           "node already belongs to an intersection");
+    addNodeImpl(id, node);
+    return {.id = id,
+            .undo = [this, id, node] { removeNodeImpl(id, node); }};
+}
+
+Signal::IntersectionMutation Signal::removeNode(IntersectionId id,
+                                                NodeId node) {
+    assert(data_.intersections().alive(id));
+    assert(data_.intersectionAt(node) == id &&
+           "node does not belong to this intersection");
+    removeNodeImpl(id, node);
+    return {.id = id, .undo = [this, id, node] { addNodeImpl(id, node); }};
+}
+
+void Signal::addNodeImpl(IntersectionId id, NodeId node) {
+    data_.intersections().get(id)->nodes().push_back(node);
+    data_.nodeIntersection().set(node, id);
+}
+
+void Signal::removeNodeImpl(IntersectionId id, NodeId node) {
+    auto& nodes = data_.intersections().get(id)->nodes();
+    nodes.erase(std::ranges::find(nodes, node));
+    data_.nodeIntersection().erase(node);
+}
+
+//
 //  CONFIG LIFECYCLE
 //
 
-Signal::ConfigMutation Signal::createConfig(NodeId at, std::string name) {
+Signal::ConfigMutation Signal::createConfig(IntersectionId at,
+                                            std::string name) {
     auto id = data_.configs().emplace(at, std::move(name));
     registerConfig(data_, at, id);
     return {.id = id, .at = at, .undo = [this, id] {
@@ -49,8 +99,8 @@ Signal::ConfigMutation Signal::removeConfig(SignalConfigId id) {
     assert(data_.configs().get(id)->signalGroups().empty() &&
            "remove a config's signal groups before removing the config");
     auto vs = removeConfigImpl(id);
-    NodeId nodeId = vs.value.at();
-    return {.id = id, .at = nodeId, .undo = [this, vs = std::move(vs)] mutable {
+    IntersectionId at = vs.value.at();
+    return {.id = id, .at = at, .undo = [this, vs = std::move(vs)] mutable {
                 createConfigImpl(std::move(vs));
             }};
 }
@@ -59,10 +109,10 @@ Signal::ConfigMutation Signal::renameConfig(SignalConfigId id,
                                             std::string name) {
     assert(data_.configs().alive(id));
     auto* cfg = data_.configs().get(id);
-    NodeId nodeId = cfg->at();
+    IntersectionId at = cfg->at();
     std::string old = cfg->name();
     cfg->setName(std::move(name));
-    return {.id = id, .at = nodeId, .undo = [this, id, old = std::move(old)] mutable {
+    return {.id = id, .at = at, .undo = [this, id, old = std::move(old)] mutable {
                 data_.configs().get(id)->setName(std::move(old));
             }};
 }
@@ -74,11 +124,11 @@ Signal::ConfigMutation Signal::renameConfig(SignalConfigId id,
 Signal::GroupMutation Signal::createSignalGroup(SignalGroup sg) {
     SignalConfigId configId =
         std::visit([](const auto& x) { return x.config(); }, sg);
-    NodeId nodeId = data_.configs().get(configId)->at();
+    IntersectionId at = data_.configs().get(configId)->at();
     auto id = data_.signalGroups().insert(std::move(sg));
     registerSg(data_, configId, id);
     dirty_.insert(configId);
-    return {.id = id, .config = configId, .at = nodeId, .undo = [this, id] {
+    return {.id = id, .config = configId, .at = at, .undo = [this, id] {
                 data_.signalGroups().release(removeSignalGroupImpl(id));
             }};
 }
@@ -110,7 +160,7 @@ Signal::GroupMutation Signal::setIntervalMin(SignalGroupId id, int min) {
     auto* sg = data_.signalGroups().get(id);
     SignalConfigId configId =
         std::visit([](const auto& x) { return x.config(); }, *sg);
-    NodeId nodeId = data_.configs().get(configId)->at();
+    IntersectionId at = data_.configs().get(configId)->at();
     int old = std::visit([](const auto& x) { return x.intervalMin(); }, *sg);
     auto apply = [this, id, configId](int v) {
         std::visit([v](auto& x) { x.setIntervalMin(v); },
@@ -120,7 +170,7 @@ Signal::GroupMutation Signal::setIntervalMin(SignalGroupId id, int min) {
     apply(min);
     return {.id = id,
             .config = configId,
-            .at = nodeId,
+            .at = at,
             .undo = [apply, old] { apply(old); }};
 }
 
@@ -130,7 +180,7 @@ Signal::GroupMutation Signal::setProtected(SignalGroupId id,
     auto* sg = data_.signalGroups().get(id);
     SignalConfigId configId =
         std::visit([](const auto& x) { return x.config(); }, *sg);
-    NodeId nodeId = data_.configs().get(configId)->at();
+    IntersectionId at = data_.configs().get(configId)->at();
     bool old = std::get<MovementSignalGroup>(*sg).isProtected();
     auto apply = [this, id, configId](bool v) {
         std::get<MovementSignalGroup>(*data_.signalGroups().get(id))
@@ -140,7 +190,7 @@ Signal::GroupMutation Signal::setProtected(SignalGroupId id,
     apply(isProtected);
     return {.id = id,
             .config = configId,
-            .at = nodeId,
+            .at = at,
             .undo = [apply, old] { apply(old); }};
 }
 
@@ -149,10 +199,10 @@ Signal::GroupMutation Signal::removeSignalGroup(SignalGroupId id) {
     auto vs = removeSignalGroupImpl(id);
     SignalConfigId configId =
         std::visit([](const auto& x) { return x.config(); }, vs.value);
-    NodeId nodeId = data_.configs().get(configId)->at();
+    IntersectionId at = data_.configs().get(configId)->at();
     return {.id = id,
             .config = configId,
-            .at = nodeId,
+            .at = at,
             .undo = [this, vs = std::move(vs)] mutable {
                 createSignalGroupImpl(std::move(vs));
             }};
@@ -178,16 +228,16 @@ void Signal::recomputeDerived(const GraphDerived& graphDerived,
 
 void Signal::createConfigImpl(
     SlotMap<SignalConfigTag, SignalConfig>::VacatedSlot vs) {
-    NodeId nodeId = vs.value.at();
-    registerConfig(data_, nodeId, vs.id);
+    IntersectionId at = vs.value.at();
+    registerConfig(data_, at, vs.id);
     data_.configs().reinsert(std::move(vs));
 }
 
 SlotMap<SignalConfigTag, SignalConfig>::VacatedSlot Signal::removeConfigImpl(
     SignalConfigId id) {
     auto vs = data_.configs().vacate(id);
-    NodeId nodeId = vs.value.at();
-    unregisterConfig(data_, nodeId, id);
+    IntersectionId at = vs.value.at();
+    unregisterConfig(data_, at, id);
     dirty_.insert(id);
     return vs;
 }

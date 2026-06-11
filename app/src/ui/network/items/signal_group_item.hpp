@@ -4,6 +4,9 @@
 #include <QString>
 #include <road_network/util/ids.hpp>
 
+// Screen-space label anchored at a scene position (ItemIgnoresTransformations:
+// local coordinates are device pixels). The bounding rect hugs the label so
+// it never steals clicks from surrounding items.
 class SignalGroupItem : public QGraphicsItem {
    public:
     static constexpr int Type = QGraphicsItem::UserType + 6;
@@ -18,7 +21,9 @@ class SignalGroupItem : public QGraphicsItem {
    private:
     SignalGroupId id_;
     QString label_;
-    QRectF bounds_;
+    QRectF bounds_;  // device pixels, centered on the anchor
+
+    [[nodiscard]] static QFont labelFont();
 
     static constexpr qreal kScreenPt_ = 15.0;  // fixed screen point size
     static constexpr qreal kPaddingPx_ = 5.0;  // fixed screen pixel padding

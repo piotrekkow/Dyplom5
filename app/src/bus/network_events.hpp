@@ -117,33 +117,43 @@ struct StreamIntergreenOverrideErased {
     NodeId at;
 };
 
+struct IntersectionCreated {
+    IntersectionId id;
+};
+struct IntersectionRemoved {
+    IntersectionId id;
+};
+struct IntersectionNodesChanged {
+    IntersectionId id;
+};
+
 struct SignalConfigCreated {
     SignalConfigId id;
-    NodeId at;
+    IntersectionId at;
 };
 struct SignalConfigRemoved {
     SignalConfigId id;
-    NodeId at;
+    IntersectionId at;
 };
 struct SignalConfigRenamed {
     SignalConfigId id;
-    NodeId at;
+    IntersectionId at;
 };
 
 struct SignalGroupCreated {
     SignalGroupId id;
     SignalConfigId config;
-    NodeId at;
+    IntersectionId at;
 };
 struct SignalGroupRemoved {
     SignalGroupId id;
     SignalConfigId config;
-    NodeId at;
+    IntersectionId at;
 };
 struct SignalGroupChanged {
     SignalGroupId id;
     SignalConfigId config;
-    NodeId at;
+    IntersectionId at;
 };
 
 // control domain

@@ -33,6 +33,7 @@ struct PhaseTransitionTag {};
 struct TimingTag {};
 struct SignalGroupTag {};
 struct SignalConfigTag {};
+struct IntersectionTag {};
 
 using MovementSignalGroupId = Id<MovementSignalGroupTag>;
 using CrosswalkSignalGroupId = Id<CrosswalkSignalGroupTag>;
@@ -41,6 +42,7 @@ using PhaseTransitionId = Id<PhaseTransitionTag>;
 using TimingId = Id<TimingTag>;
 using SignalGroupId = Id<SignalGroupTag>;
 using SignalConfigId = Id<SignalConfigTag>;
+using IntersectionId = Id<IntersectionTag>;
 
 // variants
 #include <variant>

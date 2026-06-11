@@ -103,9 +103,35 @@ void EditorContext::setExitLanesTx(Transaction& tx, ExitId id,
 
 void EditorContext::removeNodeTx(Transaction& tx, NodeId id) {
     assert(doc_.graph().data().nodes().alive(id));
-    for (SignalConfigId cfg : signalEditor_.configsAt(id))
-        removeSignalConfigTx(tx, cfg);
+
+    auto intersection = signalEditor_.intersectionAt(id);
+    if (intersection &&
+        doc_.signal().data().intersections().get(*intersection)->nodes().size() ==
+            1) {
+        // last node — the intersection dies with it, configs and all
+        removeIntersectionTx(tx, *intersection);
+        intersection.reset();
+    }
+
+    // strip groups referencing this node's crosswalks before the graph
+    // removes the crosswalk series (movement groups are handled by
+    // removeEntryLayoutsTx)
+    if (intersection) {
+        const auto* node = doc_.graph().data().nodes().get(id);
+        for (CrosswalkSeriesId csId : node->crosswalkSeries()) {
+            auto crosswalksCopy =
+                doc_.graph().data().crosswalkSeries().get(csId)->crosswalks();
+            for (CrosswalkId cwId : crosswalksCopy)
+                for (auto sg : signalEditor_.groupsReferencingCrosswalk(id, cwId))
+                    removeSignalGroupTx(tx, sg);
+        }
+    }
+
     removeEntryLayoutsTx(tx, id);
+
+    if (intersection)
+        signalEditor_.removeNodeFromIntersectionTx(tx, *intersection, id);
+
     graphEditor_.removeNodeTx(tx, id);
 }
 
@@ -176,13 +202,24 @@ void EditorContext::removeSignalConfigTx(Transaction& tx, SignalConfigId id) {
     signalEditor_.removeConfigTx(tx, id);
 }
 
+void EditorContext::removeIntersectionTx(Transaction& tx, IntersectionId id) {
+    for (SignalConfigId cfg : signalEditor_.configsOf(id))
+        removeSignalConfigTx(tx, cfg);
+    signalEditor_.removeIntersectionTx(tx, id);
+}
+
 //
 //  OPTIMIZER
 //
 
 std::optional<EditorContext::OptimizerRunResult> EditorContext::runOptimizerTx(
-    Transaction& tx, NodeId at, int cycleLength) {
-    auto result = signal_optimizer::optimize(at, doc_.graph(), doc_.demand(),
+    Transaction& tx, IntersectionId at, int cycleLength) {
+    const auto* intersection = doc_.signal().data().intersections().get(at);
+    if (!intersection || intersection->nodes().size() != 1)
+        return std::nullopt;  // multi-node optimization not supported yet
+
+    auto result = signal_optimizer::optimize(intersection->nodes().front(),
+                                             doc_.graph(), doc_.demand(),
                                              cycleLength);
     if (!result) return std::nullopt;
 

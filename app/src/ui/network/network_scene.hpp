@@ -14,6 +14,7 @@
 #include "items/crosswalk_series_item.hpp"
 #include "items/entry_item.hpp"
 #include "items/exit_item.hpp"
+#include "items/intersection_item.hpp"
 #include "items/movement_item.hpp"
 #include "items/signal_group_item.hpp"
 #include "road_network/util/geometry/position.hpp"
@@ -32,6 +33,8 @@ class NetworkScene : public QGraphicsScene {
     [[nodiscard]] const CrosswalkItem* crosswalkItem(CrosswalkId id) const;
     [[nodiscard]] const SignalGroupItem* signalGroupItem(
         SignalGroupId id) const;
+    [[nodiscard]] const IntersectionItem* intersectionItem(
+        IntersectionId id) const;
 
     NodeItem* nodeItem(NodeId id);
     EntryItem* entryItem(EntryId id);
@@ -40,6 +43,7 @@ class NetworkScene : public QGraphicsScene {
     CrosswalkSeriesItem* crosswalkSeriesItem(CrosswalkSeriesId id);
     CrosswalkItem* crosswalkItem(CrosswalkId id);
     SignalGroupItem* signalGroupItem(SignalGroupId id);
+    IntersectionItem* intersectionItem(IntersectionId id);
 
     void insertNode(NodeId, QPointF);
     void removeNode(NodeId);
@@ -63,6 +67,9 @@ class NetworkScene : public QGraphicsScene {
 
     void insertSignalGroup(SignalGroupId id, QPointF pos, const QString& label);
     void removeSignalGroup(SignalGroupId id);
+
+    void insertIntersection(IntersectionId id, const QPainterPath& outline);
+    void removeIntersection(IntersectionId id);
 
     void setBackdrop(const QString& path, QPointF origin, qreal mpp);
     void clearBackdrop();
@@ -91,5 +98,6 @@ class NetworkScene : public QGraphicsScene {
         crosswalkSeriesItems_;
     std::unordered_map<CrosswalkId, CrosswalkItem*> crosswalkItems_;
     std::unordered_map<SignalGroupId, SignalGroupItem*> signalGroupItems_;
+    std::unordered_map<IntersectionId, IntersectionItem*> intersectionItems_;
     QGraphicsPixmapItem* backdropItem_ = nullptr;
 };

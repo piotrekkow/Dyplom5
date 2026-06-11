@@ -5,7 +5,8 @@
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle("Intersection Modeler");
-    resize(1100, 700);
+    resize(1280, 800);
+
     scene_ = new NetworkScene(this);
     scene_->setSceneRect(-1e9, -1e9, 2e9, 2e9);
     view_ = new NetworkView(this);

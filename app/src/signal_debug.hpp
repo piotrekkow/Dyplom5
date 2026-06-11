@@ -7,8 +7,9 @@
 #include <road_network/util/ids.hpp>
 
 namespace debug_print {
-void nodeTimings(NodeId node, const Signal& signal, const Control& control,
-                 const Graph& graph, const Demand& demand);
+void intersectionTimings(IntersectionId intersection, const Signal& signal,
+                         const Control& control, const Graph& graph,
+                         const Demand& demand);
 
 void streamPermitted(NodeId node, const Graph& graph);
 void streamIntergreen(NodeId node, const Graph& graph);

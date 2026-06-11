@@ -14,15 +14,21 @@ IntergreenMatrix intergreenMatrix(const GraphDerived& graphDerived,
     const auto* cfg = signal.configs().get(id);
     if (!cfg) return result;
     const auto& groups = cfg->signalGroups();
-    NodeId node = cfg->at();
+    const auto* intersection = signal.intersections().get(cfg->at());
+    if (!intersection) return result;
+    const auto& nodes = intersection->nodes();
 
-    const auto* permMap = graphDerived.streamPermitted().get(node);
-    const auto* igMap = graphDerived.streamIntergreen().get(node);
-    if (!permMap || !igMap) return result;
-
+    // Per-node maps only hold intra-node stream pairs; pairs spanning two
+    // nodes of the intersection have no geometric conflict and therefore no
+    // intergreen constraint.
     auto permitted = [&](StreamId a, StreamId b) {
-        auto it = permMap->find(a);
-        return it != permMap->end() && it->second.count(b);
+        for (NodeId node : nodes) {
+            const auto* permMap = graphDerived.streamPermitted().get(node);
+            if (!permMap) continue;
+            auto it = permMap->find(a);
+            if (it != permMap->end() && it->second.count(b)) return true;
+        }
+        return false;
     };
 
     auto groupStreams = [&](SignalGroupId sgId) {
@@ -45,20 +51,25 @@ IntergreenMatrix intergreenMatrix(const GraphDerived& graphDerived,
 
         for (auto evStr : groupStreams(evacGroupId)) {
             for (auto apStr : groupStreams(apprGroupId)) {
-                auto evacIt = igMap->find(evStr);
-                if (evacIt == igMap->end()) continue;
-                auto apprIt = evacIt->second.find(apStr);
-                if (apprIt == evacIt->second.end()) continue;
+                for (NodeId node : nodes) {
+                    const auto* igMap =
+                        graphDerived.streamIntergreen().get(node);
+                    if (!igMap) continue;
+                    auto evacIt = igMap->find(evStr);
+                    if (evacIt == igMap->end()) continue;
+                    auto apprIt = evacIt->second.find(apStr);
+                    if (apprIt == evacIt->second.end()) continue;
 
-                bool skip = false;
-                if (!evacProtected && !apprProtected) {
-                    // Both are non‑protected → use permitted map to skip
-                    if (permitted(evStr, apStr) && permitted(apStr, evStr))
-                        skip = true;
-                }
+                    bool skip = false;
+                    if (!evacProtected && !apprProtected) {
+                        // Both are non‑protected → use permitted map to skip
+                        if (permitted(evStr, apStr) && permitted(apStr, evStr))
+                            skip = true;
+                    }
 
-                if (!skip) {
-                    maxTime = std::max(maxTime, apprIt->second.t_max);
+                    if (!skip) {
+                        maxTime = std::max(maxTime, apprIt->second.t_max);
+                    }
                 }
             }
         }

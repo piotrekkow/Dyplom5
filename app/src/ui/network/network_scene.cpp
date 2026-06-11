@@ -202,6 +202,32 @@ void NetworkScene::removeSignalGroup(SignalGroupId id) {
     signalGroupItems_.erase(it);
 }
 
+const IntersectionItem* NetworkScene::intersectionItem(
+    IntersectionId id) const {
+    auto it = intersectionItems_.find(id);
+    return it != intersectionItems_.end() ? it->second : nullptr;
+}
+
+IntersectionItem* NetworkScene::intersectionItem(IntersectionId id) {
+    auto it = intersectionItems_.find(id);
+    return it != intersectionItems_.end() ? it->second : nullptr;
+}
+
+void NetworkScene::insertIntersection(IntersectionId id,
+                                      const QPainterPath& outline) {
+    auto* item = new IntersectionItem(id, outline);
+    addItem(item);
+    intersectionItems_[id] = item;
+}
+
+void NetworkScene::removeIntersection(IntersectionId id) {
+    auto it = intersectionItems_.find(id);
+    if (it == intersectionItems_.end()) return;
+    removeItem(it->second);
+    delete it->second;
+    intersectionItems_.erase(it);
+}
+
 void NetworkScene::setBackdrop(const QString& path, QPointF origin, qreal mpp) {
     clearBackdrop();
     QPixmap px(path);

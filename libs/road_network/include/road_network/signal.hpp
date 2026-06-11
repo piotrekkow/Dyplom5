@@ -16,21 +16,36 @@ class Signal {
     const SignalData& data() const { return data_; }
     const SignalDerived& derived() const { return derived_; }
 
+    struct IntersectionMutation {
+        IntersectionId id;
+        std::move_only_function<void()> undo;
+    };
+
     struct ConfigMutation {
         SignalConfigId id;
-        NodeId at;
+        IntersectionId at;
         std::move_only_function<void()> undo;
     };
 
     struct GroupMutation {
         SignalGroupId id;
         SignalConfigId config;
-        NodeId at;
+        IntersectionId at;
         std::move_only_function<void()> undo;
     };
 
+    // intersection lifecycle
+    IntersectionMutation createIntersection(std::string name);
+    // pre: intersection has no configs and no nodes (caller removes/detaches
+    // them first)
+    IntersectionMutation removeIntersection(IntersectionId id);
+    // pre: node is not part of any intersection
+    IntersectionMutation addNode(IntersectionId id, NodeId node);
+    // pre: node is part of this intersection
+    IntersectionMutation removeNode(IntersectionId id, NodeId node);
+
     // config lifecycle
-    ConfigMutation createConfig(NodeId at, std::string name);
+    ConfigMutation createConfig(IntersectionId at, std::string name);
     // pre: config has no signal groups (caller removes them first)
     ConfigMutation removeConfig(SignalConfigId id);
     ConfigMutation renameConfig(SignalConfigId id, std::string name);
@@ -64,6 +79,8 @@ class Signal {
     std::unordered_set<SignalConfigId> dirty_;
     void recomputeDerived(const GraphDerived& graphDerived, SignalConfigId id);
 
+    void addNodeImpl(IntersectionId id, NodeId node);
+    void removeNodeImpl(IntersectionId id, NodeId node);
     void createConfigImpl(SlotMap<SignalConfigTag, SignalConfig>::VacatedSlot vs);
     SlotMap<SignalConfigTag, SignalConfig>::VacatedSlot removeConfigImpl(
         SignalConfigId id);

@@ -47,4 +47,10 @@ class NetworkScenePopulator {
 
     EventBus<SignalGroupCreated>::Subscription signalGroupCreated_;
     EventBus<SignalGroupRemoved>::Subscription signalGroupRemoved_;
+
+    EventBus<IntersectionCreated>::Subscription intersectionCreated_;
+    EventBus<IntersectionNodesChanged>::Subscription intersectionNodesChanged_;
+    EventBus<IntersectionRemoved>::Subscription intersectionRemoved_;
+
+    [[nodiscard]] QPainterPath intersectionOutline(IntersectionId id) const;
 };

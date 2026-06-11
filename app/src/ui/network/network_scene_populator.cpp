@@ -204,4 +204,58 @@ NetworkScenePopulator::NetworkScenePopulator(NetworkScene& scene,
               scene_.insertSignalGroup(e.id, pos, label);
           })),
       signalGroupRemoved_(bus.signalGroupRemoved.subscribe(
-          [this](SignalGroupRemoved e) { scene_.removeSignalGroup(e.id); })) {}
+          [this](SignalGroupRemoved e) { scene_.removeSignalGroup(e.id); })),
+      intersectionCreated_(
+          bus.intersectionCreated.subscribe([this](IntersectionCreated e) {
+              scene_.insertIntersection(e.id, intersectionOutline(e.id));
+          })),
+      intersectionNodesChanged_(bus.intersectionNodesChanged.subscribe(
+          [this](IntersectionNodesChanged e) {
+              if (auto* item = scene_.intersectionItem(e.id))
+                  item->setOutline(intersectionOutline(e.id));
+          })),
+      intersectionRemoved_(bus.intersectionRemoved.subscribe(
+          [this](IntersectionRemoved e) { scene_.removeIntersection(e.id); })) {
+}
+
+// Bounding outline of the intersection's member-node geometry: node centers,
+// entry/exit anchors, and crosswalk endpoints, padded.
+QPainterPath NetworkScenePopulator::intersectionOutline(
+    IntersectionId id) const {
+    static constexpr qreal kPaddingMeters = 4.0;
+    static constexpr qreal kCornerRadius = 3.0;
+
+    QPainterPath path;
+    const auto* intersection = signalData_.intersections().get(id);
+    if (!intersection) return path;
+
+    QRectF bounds;
+    auto include = [&](QPointF p) {
+        QRectF r(p, p);
+        bounds = bounds.isNull() ? r : bounds.united(r);
+    };
+
+    for (NodeId nodeId : intersection->nodes()) {
+        const auto* node = data_.nodes().get(nodeId);
+        if (!node) continue;
+        include(xf_.toScene(node->center()));
+        for (EntryId eId : node->entries())
+            include(xf_.toScene(data_.entries().get(eId)->position()));
+        for (ExitId xId : node->exits())
+            include(xf_.toScene(data_.exits().get(xId)->position()));
+        for (CrosswalkSeriesId csId : node->crosswalkSeries()) {
+            for (CrosswalkId cwId :
+                 data_.crosswalkSeries().get(csId)->crosswalks()) {
+                auto line = data_.crosswalks().get(cwId)->params().line;
+                include(xf_.toScene(line.p1));
+                include(xf_.toScene(line.p2));
+            }
+        }
+    }
+    if (bounds.isNull()) return path;
+
+    bounds.adjust(-kPaddingMeters, -kPaddingMeters, kPaddingMeters,
+                  kPaddingMeters);
+    path.addRoundedRect(bounds, kCornerRadius, kCornerRadius);
+    return path;
+}
