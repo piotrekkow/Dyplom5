@@ -94,6 +94,80 @@ void GraphEditor::setExitLanesTx(Transaction& tx, ExitId at,
 //  SETTERS TX
 //
 
+void GraphEditor::moveEntryTx(Transaction& tx, EntryId id, Position position,
+                              Vector2 heading) {
+    auto mutP = graph_.setEntryPosition(id, position);
+    NodeId nodeId = mutP.at;
+    tx.recordUndo(std::move(mutP.undo), bus_.entryMoved,
+                  EntryMoved{id, nodeId});
+    auto mutH = graph_.setEntryHeading(id, heading);
+    tx.recordUndoSilent(std::move(mutH.undo));
+    tx.recordEvent(bus_.entryMoved, EntryMoved{id, nodeId});
+
+    // movement polylines anchor at the entry — repaint them
+    for (MovementId m : graph_.data().entries().get(id)->movements()) {
+        tx.recordEvent(bus_.movementUpdated, MovementUpdated{m, nodeId});
+        tx.recordUndoEvent(bus_.movementUpdated, MovementUpdated{m, nodeId});
+    }
+    onNodeStale(tx, nodeId);
+}
+
+void GraphEditor::moveExitTx(Transaction& tx, ExitId id, Position position,
+                             Vector2 heading) {
+    auto mutP = graph_.setExitPosition(id, position);
+    NodeId nodeId = mutP.at;
+    tx.recordUndo(std::move(mutP.undo), bus_.exitMoved, ExitMoved{id, nodeId});
+    auto mutH = graph_.setExitHeading(id, heading);
+    tx.recordUndoSilent(std::move(mutH.undo));
+    tx.recordEvent(bus_.exitMoved, ExitMoved{id, nodeId});
+
+    // movement polylines end at the exit — repaint movements targeting it
+    const auto* node = graph_.data().nodes().get(nodeId);
+    for (EntryId eId : node->entries()) {
+        for (MovementId m : graph_.data().entries().get(eId)->movements()) {
+            if (graph_.data().movements().get(m)->to() != id) continue;
+            tx.recordEvent(bus_.movementUpdated, MovementUpdated{m, nodeId});
+            tx.recordUndoEvent(bus_.movementUpdated,
+                               MovementUpdated{m, nodeId});
+        }
+    }
+    onNodeStale(tx, nodeId);
+}
+
+void GraphEditor::setEntrySpeedLimitTx(Transaction& tx, EntryId id,
+                                       float speedLimit) {
+    auto mut = graph_.setEntrySpeedLimit(id, speedLimit);
+    NodeId nodeId = mut.at;
+    tx.recordUndo(std::move(mut.undo), bus_.entrySpeedLimitChanged,
+                  EntrySpeedLimitChanged{id, nodeId});
+    tx.recordEvent(bus_.entrySpeedLimitChanged,
+                   EntrySpeedLimitChanged{id, nodeId});
+    onNodeStale(tx, nodeId);
+}
+
+void GraphEditor::setExitSpeedLimitTx(Transaction& tx, ExitId id,
+                                      float speedLimit) {
+    auto mut = graph_.setExitSpeedLimit(id, speedLimit);
+    NodeId nodeId = mut.at;
+    tx.recordUndo(std::move(mut.undo), bus_.exitSpeedLimitChanged,
+                  ExitSpeedLimitChanged{id, nodeId});
+    tx.recordEvent(bus_.exitSpeedLimitChanged,
+                   ExitSpeedLimitChanged{id, nodeId});
+    onNodeStale(tx, nodeId);
+}
+
+void GraphEditor::setCrosswalkSeriesWalkSpeedTx(Transaction& tx,
+                                                CrosswalkSeriesId id,
+                                                float speed) {
+    auto mut = graph_.setCrosswalkSeriesWalkSpeed(id, speed);
+    NodeId nodeId = mut.at;
+    tx.recordUndo(std::move(mut.undo), bus_.crosswalkSeriesWalkSpeedChanged,
+                  CrosswalkSeriesWalkSpeedChanged{id, nodeId});
+    tx.recordEvent(bus_.crosswalkSeriesWalkSpeedChanged,
+                   CrosswalkSeriesWalkSpeedChanged{id, nodeId});
+    onNodeStale(tx, nodeId);
+}
+
 std::expected<void, MovementLayoutError> GraphEditor::validateLayout(
     EntryId id, const std::vector<MovementSpec>& specs,
     const std::vector<bool>& shared) {

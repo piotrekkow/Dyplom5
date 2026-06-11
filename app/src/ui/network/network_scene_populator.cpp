@@ -132,6 +132,15 @@ NetworkScenePopulator::NetworkScenePopulator(NetworkScene& scene,
           scene_.insertEntry(e.id, xf_.toScene(entry->position()),
                              xf_.toScene(entry->heading()));
       })),
+      entryMoved_(bus.entryMoved.subscribe([this](EntryMoved e) {
+          auto entry = data_.entries().get(e.id);
+          if (auto* item = scene_.entryItem(e.id)) {
+              item->setPlacement(xf_.toScene(entry->position()),
+                                 xf_.toScene(entry->heading()));
+              item->setLanePoints(
+                  xf_.toScene(graph_geometry::lanePositions(data_, e.id)));
+          }
+      })),
       entryLanesChanged_(
           bus.entryLanesChanged.subscribe([this](EntryLanesChanged e) {
               scene_.entryItem(e.id)->setLanePoints(
@@ -143,6 +152,15 @@ NetworkScenePopulator::NetworkScenePopulator(NetworkScene& scene,
           auto exit = data_.exits().get(e.id);
           scene_.insertExit(e.id, xf_.toScene(exit->position()),
                             xf_.toScene(exit->heading()));
+      })),
+      exitMoved_(bus.exitMoved.subscribe([this](ExitMoved e) {
+          auto exit = data_.exits().get(e.id);
+          if (auto* item = scene_.exitItem(e.id)) {
+              item->setPlacement(xf_.toScene(exit->position()),
+                                 xf_.toScene(exit->heading()));
+              item->setLanePoints(
+                  xf_.toScene(graph_geometry::lanePositions(data_, e.id)));
+          }
       })),
       exitLanesChanged_(
           bus.exitLanesChanged.subscribe([this](ExitLanesChanged e) {

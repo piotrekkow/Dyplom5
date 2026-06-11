@@ -1,15 +1,16 @@
 #include "control_editor.hpp"
 
+#include <road_network/graph.hpp>
 #include <road_network/signal.hpp>
-#include <variant>
 
 #include "bus/network_event_bus.hpp"
 #include "bus/network_events.hpp"
+#include "root/command/solve_priority.hpp"
 #include "root/command/transaction.hpp"
 
 ControlEditor::ControlEditor(Control& control, const Signal& signal,
-                             NetworkEventBus& bus)
-    : control_(control), signal_(signal), bus_(bus) {}
+                             const Graph& graph, NetworkEventBus& bus)
+    : control_(control), signal_(signal), graph_(graph), bus_(bus) {}
 
 //
 //  TIMING LIFECYCLE TX
@@ -24,14 +25,11 @@ TimingId ControlEditor::createTimingTx(Transaction& tx, SignalConfigId at,
     tx.recordEvent(bus_.timingCreated, TimingCreated{id, at});
 
     if (const auto* cfg = signal_.data().configs().get(at)) {
-        for (SignalGroupId sgId : cfg->signalGroups()) {
-            int minIntervalLength =
-                std::visit([](const auto& x) { return x.intervalMin(); },
-                           *signal_.data().signalGroups().get(sgId));
-            createSequenceTx(tx, id, sgId, minIntervalLength);
-        }
+        for (SignalGroupId sgId : cfg->signalGroups())
+            createSequenceTx(tx, id, sgId);
     }
 
+    onControlStale(tx, at);
     return id;
 }
 
@@ -41,6 +39,7 @@ void ControlEditor::removeTimingTx(Transaction& tx, TimingId id) {
     tx.recordUndo(std::move(mut.undo), bus_.timingCreated,
                   TimingCreated{id, at});
     tx.recordEvent(bus_.timingRemoved, TimingRemoved{id, at});
+    onControlStale(tx, at);
 }
 
 //
@@ -54,6 +53,7 @@ void ControlEditor::setAlwaysActiveTx(Transaction& tx, TimingId timingId,
                   SequenceChanged{timingId, sgId, mut.at});
     tx.recordEvent(bus_.sequenceChanged,
                    SequenceChanged{timingId, sgId, mut.at});
+    onControlStale(tx, mut.at);
 }
 
 std::expected<void, TimingError> ControlEditor::setIntervalsTx(
@@ -62,22 +62,11 @@ std::expected<void, TimingError> ControlEditor::setIntervalsTx(
     auto res = control_.setIntervals(timingId, sgId, std::move(intervals));
     if (!res) return std::unexpected(res.error());
 
+    SignalConfigId at = res->at;
     tx.recordUndo(std::move(res->undo), bus_.sequenceChanged,
-                  SequenceChanged{timingId, sgId, res->at});
-    tx.recordEvent(bus_.sequenceChanged,
-                   SequenceChanged{timingId, sgId, res->at});
-    return {};
-}
-
-std::expected<void, TimingWarning> ControlEditor::setMinIntervalLengthTx(
-    Transaction& tx, TimingId timingId, SignalGroupId sgId, int min) {
-    auto res = control_.setMinIntervalLength(timingId, sgId, min);
-    if (!res) return std::unexpected(res.error());
-
-    tx.recordUndo(std::move(res->undo), bus_.sequenceChanged,
-                  SequenceChanged{timingId, sgId, res->at});
-    tx.recordEvent(bus_.sequenceChanged,
-                   SequenceChanged{timingId, sgId, res->at});
+                  SequenceChanged{timingId, sgId, at});
+    tx.recordEvent(bus_.sequenceChanged, SequenceChanged{timingId, sgId, at});
+    onControlStale(tx, at);
     return {};
 }
 
@@ -95,25 +84,31 @@ void ControlEditor::onConfigRemovedTx(Transaction& tx, SignalConfigId id) {
 
 void ControlEditor::onSignalGroupCreatedTx(Transaction& tx,
                                            SignalConfigId config,
-                                           SignalGroupId sgId,
-                                           int minIntervalLength) {
-    const auto* cc = control_.data().configControls().get(config);
-    if (!cc) return;
-
-    for (TimingId timingId : cc->timings)
-        createSequenceTx(tx, timingId, sgId, minIntervalLength);
+                                           SignalGroupId sgId) {
+    if (const auto* cc = control_.data().configControls().get(config)) {
+        for (TimingId timingId : cc->timings)
+            createSequenceTx(tx, timingId, sgId);
+    }
+    onControlStale(tx, config);
 }
 
 void ControlEditor::onSignalGroupRemovedTx(Transaction& tx,
                                            SignalConfigId config,
                                            SignalGroupId sgId) {
-    const auto* cc = control_.data().configControls().get(config);
-    if (!cc) return;
-
-    for (TimingId timingId : cc->timings) {
-        if (control_.data().timings().get(timingId)->hasSequence(sgId))
-            removeSequenceTx(tx, timingId, sgId);
+    if (const auto* cc = control_.data().configControls().get(config)) {
+        for (TimingId timingId : cc->timings) {
+            if (control_.data().timings().get(timingId)->hasSequence(sgId))
+                removeSequenceTx(tx, timingId, sgId);
+        }
     }
+    onControlStale(tx, config);
+}
+
+void ControlEditor::onConfigParamsChangedTx(Transaction& tx,
+                                            SignalConfigId id) {
+    control_.markStale(id);
+    tx.recordUndoSilent([this, id] { control_.markStale(id); });
+    onControlStale(tx, id);
 }
 
 //
@@ -121,9 +116,8 @@ void ControlEditor::onSignalGroupRemovedTx(Transaction& tx,
 //
 
 void ControlEditor::createSequenceTx(Transaction& tx, TimingId timingId,
-                                     SignalGroupId sgId,
-                                     int minIntervalLength) {
-    auto mut = control_.createSequence(timingId, sgId, minIntervalLength);
+                                     SignalGroupId sgId) {
+    auto mut = control_.createSequence(timingId, sgId);
     tx.recordUndo(std::move(mut.undo), bus_.sequenceChanged,
                   SequenceChanged{timingId, sgId, mut.at});
     tx.recordEvent(bus_.sequenceChanged,
@@ -137,4 +131,27 @@ void ControlEditor::removeSequenceTx(Transaction& tx, TimingId timingId,
                   SequenceChanged{timingId, sgId, mut.at});
     tx.recordEvent(bus_.sequenceChanged,
                    SequenceChanged{timingId, sgId, mut.at});
+}
+
+void ControlEditor::onControlStale(Transaction& tx, SignalConfigId id) {
+    const auto* cfg = signal_.data().configs().get(id);
+    if (!cfg) return;  // config already removed — nothing left to re-validate
+    IntersectionId at = cfg->at();
+    tx.recordEvent(bus_.configCompletenessChanged,
+                   ConfigCompletenessChanged{id, at});
+    tx.recordUndoEvent(bus_.configCompletenessChanged,
+                       ConfigCompletenessChanged{id, at});
+
+    if (const auto* cc = control_.data().configControls().get(id)) {
+        for (TimingId tId : cc->timings) {
+            tx.recordEvent(bus_.timingValidityChanged,
+                           TimingValidityChanged{tId, id});
+            tx.recordUndoEvent(bus_.timingValidityChanged,
+                               TimingValidityChanged{tId, id});
+        }
+    }
+
+    tx.addSolve(SolvePriority::CONTROL, [this] {
+        control_.solve(graph_.data(), signal_.data(), signal_.derived());
+    });
 }

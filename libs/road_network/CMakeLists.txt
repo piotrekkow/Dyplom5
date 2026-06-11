@@ -15,8 +15,9 @@ add_library(road_network_lib
     src/derived/signal_compute.cpp
    
     src/data/flow.cpp
-    src/data/sequence.cpp
     src/data/timing.cpp
+
+    src/derived/control_compute.cpp
 )
 target_include_directories(road_network_lib 
     PUBLIC include

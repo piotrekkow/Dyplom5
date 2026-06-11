@@ -1,10 +1,13 @@
 #pragma once
 
+#include <expected>
 #include <optional>
 #include <road_network/signal.hpp>
 #include <road_network/util/ids.hpp>
 #include <string>
 #include <vector>
+
+#include "errors/signal_errors.hpp"
 
 class Graph;
 class NetworkEventBus;
@@ -32,17 +35,23 @@ class SignalEditor {
                                   std::string name);
     void renameConfigTx(Transaction& tx, SignalConfigId id, std::string name);
 
-    // Signal group Tx
-    SignalGroupId addMovementGroupTx(Transaction& tx, SignalConfigId config,
-                                     std::vector<ClusterId> clusters,
-                                     bool isProtected, int intervalMin);
-    SignalGroupId addCrosswalkGroupTx(Transaction& tx, SignalConfigId config,
-                                      std::vector<CrosswalkId> crosswalks,
-                                      int intervalMin);
-    SignalGroupId addTurnArrowGroupTx(Transaction& tx, SignalConfigId config,
-                                      MovementId movement, int intervalMin);
+    // Signal group Tx — duplicate-membership / turn-arrow constraints are
+    // validated here, before any mutation
+    std::expected<SignalGroupId, SignalGroupError> addMovementGroupTx(
+        Transaction& tx, SignalConfigId config, std::vector<ClusterId> clusters,
+        bool isProtected, int intervalMin);
+    std::expected<SignalGroupId, SignalGroupError> addCrosswalkGroupTx(
+        Transaction& tx, SignalConfigId config,
+        std::vector<CrosswalkId> crosswalks, int intervalMin);
+    std::expected<SignalGroupId, SignalGroupError> addTurnArrowGroupTx(
+        Transaction& tx, SignalConfigId config, MovementId movement,
+        int intervalMin);
     void setIntervalMinTx(Transaction& tx, SignalGroupId id, int min);
     void setProtectedTx(Transaction& tx, SignalGroupId id, bool isProtected);
+
+    // graph-side parameters feeding the config's intergreen matrix changed —
+    // schedule a recompute
+    void markConfigStaleTx(Transaction& tx, SignalConfigId id);
 
     // Tx halves of cross-domain cascades — called only by EditorContext,
     // which cleans the control domain first
@@ -58,6 +67,11 @@ class SignalEditor {
         const std::vector<MovementId>& movements) const;
     [[nodiscard]] std::vector<SignalGroupId> groupsReferencingCrosswalk(
         NodeId at, CrosswalkId id) const;
+
+    // right-turn movements at the config's intersection without an arrow
+    // group in this config
+    [[nodiscard]] std::vector<MovementId> eligibleTurnArrowMovements(
+        SignalConfigId config) const;
 
    private:
     Signal& signal_;

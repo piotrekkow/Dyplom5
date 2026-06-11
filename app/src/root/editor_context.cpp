@@ -1,8 +1,9 @@
 #include "editor_context.hpp"
 
+#include <cassert>
 #include <expected>
 #include <signal_optimizer/optimizer.hpp>
-#include <tuple>
+#include <string>
 #include <variant>
 
 #include "bus/network_event_bus.hpp"
@@ -20,7 +21,8 @@ EditorContext::EditorContext(Document& doc, NetworkEventBus& bus)
       graphEditor_(doc.graph(), bus),
       demandEditor_(doc.demand(), doc.graph().data(), bus),
       signalEditor_(doc.signal(), doc.graph(), bus),
-      controlEditor_(doc.control(), doc.signal(), bus),
+      controlEditor_(doc.control(), doc.signal(), doc.graph(), bus),
+      destroyQuery_(doc, signalEditor_),
       graphUseCases_(
           std::make_unique<GraphUseCases>(graphEditor_, *this, cmdStack_)),
       demandUseCases_(
@@ -41,12 +43,15 @@ EditorContext::setEntryLayoutTx(Transaction& tx, EntryId id,
 
     auto entry = doc_.graph().data().entries().get(id);
     assert(entry);
+    NodeId at = entry->at();
 
     for (auto m : entry->movements()) {
         demandEditor_.onMovementRemovedTx(tx, m);
     }
-    return graphEditor_.setEntryLayoutTx(tx, id, std::move(specs),
-                                         std::move(shared));
+    auto movements = graphEditor_.setEntryLayoutTx(tx, id, std::move(specs),
+                                                   std::move(shared));
+    markSignalControlStaleAtNodeTx(tx, at);
+    return movements;
 }
 
 void EditorContext::removeCrosswalkTx(Transaction& tx, CrosswalkId id) {
@@ -56,6 +61,7 @@ void EditorContext::removeCrosswalkTx(Transaction& tx, CrosswalkId id) {
     for (auto sg : signalEditor_.groupsReferencingCrosswalk(at, id))
         removeSignalGroupTx(tx, sg);
     graphEditor_.removeCrosswalkTx(tx, id);
+    markSignalControlStaleAtNodeTx(tx, at);
 }
 
 void EditorContext::removeCrosswalkSeriesTx(Transaction& tx,
@@ -68,6 +74,7 @@ void EditorContext::removeCrosswalkSeriesTx(Transaction& tx,
         for (auto sg : signalEditor_.groupsReferencingCrosswalk(at, cid))
             removeSignalGroupTx(tx, sg);
     graphEditor_.removeCrosswalkSeriesTx(tx, id);
+    markSignalControlStaleAtNodeTx(tx, at);
 }
 
 void EditorContext::removeEntryTx(Transaction& tx, EntryId id) {
@@ -76,6 +83,7 @@ void EditorContext::removeEntryTx(Transaction& tx, EntryId id) {
     auto nodeId = data.entries().get(id)->at();
     removeEntryLayoutsTx(tx, nodeId);
     graphEditor_.removeEntryTx(tx, id);
+    markSignalControlStaleAtNodeTx(tx, nodeId);
 }
 
 void EditorContext::removeExitTx(Transaction& tx, ExitId id) {
@@ -84,13 +92,16 @@ void EditorContext::removeExitTx(Transaction& tx, ExitId id) {
     auto nodeId = data.exits().get(id)->at();
     removeEntryLayoutsTx(tx, nodeId);
     graphEditor_.removeExitTx(tx, id);
+    markSignalControlStaleAtNodeTx(tx, nodeId);
 }
 
 void EditorContext::setEntryLanesTx(Transaction& tx, EntryId id,
                                     std::vector<EntryLaneSpec> specs) {
     assert(doc_.graph().data().entries().alive(id));
+    NodeId at = doc_.graph().data().entries().get(id)->at();
     removeEntryLayoutTx(tx, id);
     graphEditor_.setEntryLanesTx(tx, id, std::move(specs));
+    markSignalControlStaleAtNodeTx(tx, at);
 }
 
 void EditorContext::setExitLanesTx(Transaction& tx, ExitId id,
@@ -99,6 +110,7 @@ void EditorContext::setExitLanesTx(Transaction& tx, ExitId id,
     auto nodeId = doc_.graph().data().exits().get(id)->at();
     removeEntryLayoutsTx(tx, nodeId);
     graphEditor_.setExitLanesTx(tx, id, std::move(specs));
+    markSignalControlStaleAtNodeTx(tx, nodeId);
 }
 
 void EditorContext::removeNodeTx(Transaction& tx, NodeId id) {
@@ -147,6 +159,7 @@ void EditorContext::removeEntryLayoutTx(Transaction& tx, EntryId id) {
                                                    movementsCopy))
         removeSignalGroupTx(tx, sg);
     graphEditor_.clearEntryLayoutTx(tx, id);
+    markSignalControlStaleAtNodeTx(tx, at);
 }
 
 void EditorContext::removeEntryLayoutsTx(Transaction& tx, NodeId id) {
@@ -157,36 +170,185 @@ void EditorContext::removeEntryLayoutsTx(Transaction& tx, NodeId id) {
 }
 
 //
+//  GRAPH PARAMETER EDITS — preserve identity, revalidate downstream
+//
+
+void EditorContext::moveEntryTx(Transaction& tx, EntryId id, Position position,
+                                Vector2 heading) {
+    assert(doc_.graph().data().entries().alive(id));
+    NodeId at = doc_.graph().data().entries().get(id)->at();
+    graphEditor_.moveEntryTx(tx, id, position, heading);
+    markSignalControlStaleAtNodeTx(tx, at);
+}
+
+void EditorContext::moveExitTx(Transaction& tx, ExitId id, Position position,
+                               Vector2 heading) {
+    assert(doc_.graph().data().exits().alive(id));
+    NodeId at = doc_.graph().data().exits().get(id)->at();
+    graphEditor_.moveExitTx(tx, id, position, heading);
+    markSignalControlStaleAtNodeTx(tx, at);
+}
+
+void EditorContext::setEntrySpeedLimitTx(Transaction& tx, EntryId id,
+                                         float speedLimit) {
+    assert(doc_.graph().data().entries().alive(id));
+    NodeId at = doc_.graph().data().entries().get(id)->at();
+    graphEditor_.setEntrySpeedLimitTx(tx, id, speedLimit);
+    markSignalControlStaleAtNodeTx(tx, at);
+}
+
+void EditorContext::setExitSpeedLimitTx(Transaction& tx, ExitId id,
+                                        float speedLimit) {
+    assert(doc_.graph().data().exits().alive(id));
+    NodeId at = doc_.graph().data().exits().get(id)->at();
+    graphEditor_.setExitSpeedLimitTx(tx, id, speedLimit);
+    markSignalControlStaleAtNodeTx(tx, at);
+}
+
+void EditorContext::setCrosswalkSeriesWalkSpeedTx(Transaction& tx,
+                                                  CrosswalkSeriesId id,
+                                                  float speed) {
+    assert(doc_.graph().data().crosswalkSeries().alive(id));
+    NodeId at = doc_.graph().data().crosswalkSeries().get(id)->at();
+    graphEditor_.setCrosswalkSeriesWalkSpeedTx(tx, id, speed);
+    markSignalControlStaleAtNodeTx(tx, at);
+}
+
+CrosswalkId EditorContext::createCrosswalkTx(Transaction& tx,
+                                             CrosswalkSeriesId parent,
+                                             Line line) {
+    assert(doc_.graph().data().crosswalkSeries().alive(parent));
+    NodeId at = doc_.graph().data().crosswalkSeries().get(parent)->at();
+    CrosswalkId id = graphEditor_.createCrosswalkTx(tx, parent, line);
+    markSignalControlStaleAtNodeTx(tx, at);
+    return id;
+}
+
+namespace {
+NodeId crosswalkNode(const GraphData& data, CrosswalkId id) {
+    return data.crosswalkSeries().get(data.crosswalks().get(id)->parent())->at();
+}
+}  // namespace
+
+void EditorContext::setCrosswalkLineTx(Transaction& tx, CrosswalkId id,
+                                       Line line) {
+    assert(doc_.graph().data().crosswalks().alive(id));
+    graphEditor_.setCrosswalkLineTx(tx, id, line);
+    markSignalControlStaleAtNodeTx(tx, crosswalkNode(doc_.graph().data(), id));
+}
+
+void EditorContext::setCrosswalkEdgeTx(Transaction& tx, CrosswalkId id,
+                                       Crosswalk::SegmentParams edge) {
+    assert(doc_.graph().data().crosswalks().alive(id));
+    graphEditor_.setCrosswalkEdgeTx(tx, id, edge);
+    markSignalControlStaleAtNodeTx(tx, crosswalkNode(doc_.graph().data(), id));
+}
+
+void EditorContext::setCrosswalkSplitTx(Transaction& tx, CrosswalkId id,
+                                        Crosswalk::SegmentParams split) {
+    assert(doc_.graph().data().crosswalks().alive(id));
+    graphEditor_.setCrosswalkSplitTx(tx, id, split);
+    markSignalControlStaleAtNodeTx(tx, crosswalkNode(doc_.graph().data(), id));
+}
+
+void EditorContext::setCrosswalkTypeTx(Transaction& tx, CrosswalkId id,
+                                       CrosswalkType type) {
+    assert(doc_.graph().data().crosswalks().alive(id));
+    graphEditor_.setCrosswalkTypeTx(tx, id, type);
+    markSignalControlStaleAtNodeTx(tx, crosswalkNode(doc_.graph().data(), id));
+}
+
+void EditorContext::setStreamPermittedOverrideTx(Transaction& tx, NodeId node,
+                                                 StreamId evac, StreamId appr,
+                                                 bool permitted) {
+    graphEditor_.setStreamPermittedOverrideTx(tx, node, evac, appr, permitted);
+    markSignalControlStaleAtNodeTx(tx, node);
+}
+
+void EditorContext::eraseStreamPermittedOverrideTx(Transaction& tx, NodeId node,
+                                                   StreamId evac,
+                                                   StreamId appr) {
+    graphEditor_.eraseStreamPermittedOverrideTx(tx, node, evac, appr);
+    markSignalControlStaleAtNodeTx(tx, node);
+}
+
+void EditorContext::setStreamIntergreenOverrideTx(Transaction& tx, NodeId node,
+                                                  StreamId evac, StreamId appr,
+                                                  int t_maxEvAp,
+                                                  int t_maxApEv) {
+    graphEditor_.setStreamIntergreenOverrideTx(tx, node, evac, appr, t_maxEvAp,
+                                               t_maxApEv);
+    markSignalControlStaleAtNodeTx(tx, node);
+}
+
+void EditorContext::eraseStreamIntergreenOverrideTx(Transaction& tx,
+                                                    NodeId node, StreamId evac,
+                                                    StreamId appr) {
+    graphEditor_.eraseStreamIntergreenOverrideTx(tx, node, evac, appr);
+    markSignalControlStaleAtNodeTx(tx, node);
+}
+
+void EditorContext::markSignalControlStaleAtNodeTx(Transaction& tx,
+                                                   NodeId id) {
+    auto intersection = signalEditor_.intersectionAt(id);
+    if (!intersection) return;
+    for (SignalConfigId cfg : signalEditor_.configsOf(*intersection)) {
+        signalEditor_.markConfigStaleTx(tx, cfg);
+        controlEditor_.onConfigParamsChangedTx(tx, cfg);
+    }
+}
+
+//
 //  SIGNAL / CONTROL CASCADES
 //
 
-SignalGroupId EditorContext::addMovementGroupTx(
-    Transaction& tx, SignalConfigId config, std::vector<ClusterId> clusters,
-    bool isProtected, int intervalMin) {
+std::expected<SignalGroupId, SignalGroupError>
+EditorContext::addMovementGroupTx(Transaction& tx, SignalConfigId config,
+                                  std::vector<ClusterId> clusters,
+                                  bool isProtected, int intervalMin) {
     auto id = signalEditor_.addMovementGroupTx(tx, config, std::move(clusters),
                                                isProtected, intervalMin);
-    controlEditor_.onSignalGroupCreatedTx(tx, config, id, intervalMin);
+    if (id) controlEditor_.onSignalGroupCreatedTx(tx, config, *id);
     return id;
 }
 
-SignalGroupId EditorContext::addCrosswalkGroupTx(
-    Transaction& tx, SignalConfigId config, std::vector<CrosswalkId> crosswalks,
-    int intervalMin) {
+std::expected<SignalGroupId, SignalGroupError>
+EditorContext::addCrosswalkGroupTx(Transaction& tx, SignalConfigId config,
+                                   std::vector<CrosswalkId> crosswalks,
+                                   int intervalMin) {
     auto id = signalEditor_.addCrosswalkGroupTx(tx, config,
                                                 std::move(crosswalks),
                                                 intervalMin);
-    controlEditor_.onSignalGroupCreatedTx(tx, config, id, intervalMin);
+    if (id) controlEditor_.onSignalGroupCreatedTx(tx, config, *id);
     return id;
 }
 
-SignalGroupId EditorContext::addTurnArrowGroupTx(Transaction& tx,
-                                                 SignalConfigId config,
-                                                 MovementId movement,
-                                                 int intervalMin) {
+std::expected<SignalGroupId, SignalGroupError>
+EditorContext::addTurnArrowGroupTx(Transaction& tx, SignalConfigId config,
+                                   MovementId movement, int intervalMin) {
     auto id =
         signalEditor_.addTurnArrowGroupTx(tx, config, movement, intervalMin);
-    controlEditor_.onSignalGroupCreatedTx(tx, config, id, intervalMin);
+    if (id) controlEditor_.onSignalGroupCreatedTx(tx, config, *id);
     return id;
+}
+
+void EditorContext::setSignalGroupIntervalMinTx(Transaction& tx,
+                                                SignalGroupId id, int min) {
+    SignalConfigId config =
+        std::visit([](const auto& g) { return g.config(); },
+                   *doc_.signal().data().signalGroups().get(id));
+    signalEditor_.setIntervalMinTx(tx, id, min);
+    controlEditor_.onConfigParamsChangedTx(tx, config);
+}
+
+void EditorContext::setSignalGroupProtectedTx(Transaction& tx,
+                                              SignalGroupId id,
+                                              bool isProtected) {
+    SignalConfigId config =
+        std::visit([](const auto& g) { return g.config(); },
+                   *doc_.signal().data().signalGroups().get(id));
+    signalEditor_.setProtectedTx(tx, id, isProtected);
+    controlEditor_.onConfigParamsChangedTx(tx, config);
 }
 
 void EditorContext::removeSignalGroupTx(Transaction& tx, SignalGroupId id) {
@@ -223,21 +385,34 @@ std::optional<EditorContext::OptimizerRunResult> EditorContext::runOptimizerTx(
                                              cycleLength);
     if (!result) return std::nullopt;
 
-    SignalConfigId configId = signalEditor_.createConfigTx(tx, at, "optimized");
+    // dedupe the config name against the intersection's existing configs
+    auto nameTaken = [&](const std::string& name) {
+        for (SignalConfigId cfgId : intersection->configs())
+            if (doc_.signal().data().configs().get(cfgId)->name() == name)
+                return true;
+        return false;
+    };
+    std::string name = "optimized";
+    for (int n = 2; nameTaken(name); ++n)
+        name = "optimized " + std::to_string(n);
+
+    SignalConfigId configId =
+        signalEditor_.createConfigTx(tx, at, std::move(name));
 
     std::vector<SignalGroupId> sgIds;
     for (const auto& mg : result->mgResults) {
-        auto id =
-            addMovementGroupTx(tx, configId, mg.clusters, mg.isProtected, 8);
-        sgIds.push_back(id);
+        auto id = addMovementGroupTx(tx, configId, mg.clusters, mg.isProtected,
+                                     mg.minGreen);
+        assert(id && "optimizer produced overlapping movement groups");
+        if (!id) return std::nullopt;
+        sgIds.push_back(*id);
     }
 
     for (const auto& cg : result->cgResults) {
-        int intervalMin = 0;
-        if (const auto* s = std::get_if<SignalSequence>(&cg.sequence))
-            intervalMin = s->minIntervalLength();
-        auto id = addCrosswalkGroupTx(tx, configId, cg.crosswalks, intervalMin);
-        sgIds.push_back(id);
+        auto id = addCrosswalkGroupTx(tx, configId, cg.crosswalks, cg.minGreen);
+        assert(id && "optimizer produced overlapping crosswalk groups");
+        if (!id) return std::nullopt;
+        sgIds.push_back(*id);
     }
 
     TimingId timingId = controlEditor_.createTimingTx(tx, configId, cycleLength);

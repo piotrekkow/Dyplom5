@@ -17,12 +17,28 @@ struct EntryCreated {
     EntryId id;
     NodeId at;
 };
+struct EntryMoved {
+    EntryId id;
+    NodeId at;
+};
+struct EntrySpeedLimitChanged {
+    EntryId id;
+    NodeId at;
+};
 struct EntryRemoved {
     EntryId id;
     NodeId at;
 };
 
 struct ExitCreated {
+    ExitId id;
+    NodeId at;
+};
+struct ExitMoved {
+    ExitId id;
+    NodeId at;
+};
+struct ExitSpeedLimitChanged {
     ExitId id;
     NodeId at;
 };
@@ -36,6 +52,10 @@ struct CrosswalkSeriesCreated {
     NodeId at;
 };
 struct CrosswalkSeriesUpdated {
+    CrosswalkSeriesId id;
+    NodeId at;
+};
+struct CrosswalkSeriesWalkSpeedChanged {
     CrosswalkSeriesId id;
     NodeId at;
 };
@@ -101,6 +121,12 @@ struct SaturationOverrideChanged {
 };
 struct SaturationOverrideErased {
     MovementId at;
+};
+
+// published after the deferred demand solve — laneSaturations of the entry's
+// lanes may have changed (mirror of NodeRederived)
+struct DemandRederived {
+    EntryId id;
 };
 
 struct StreamPermittedOverrideChanged {
@@ -170,4 +196,15 @@ struct SequenceChanged {
     TimingId timingId;
     SignalGroupId sgId;
     SignalConfigId config;
+};
+
+// published after the deferred control validation pass (mirror of
+// NodeRederived) — re-read Control::derived() for current flags
+struct TimingValidityChanged {
+    TimingId id;
+    SignalConfigId config;
+};
+struct ConfigCompletenessChanged {
+    SignalConfigId id;
+    IntersectionId at;
 };

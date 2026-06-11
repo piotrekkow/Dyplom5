@@ -16,6 +16,7 @@ class EntryItem : public QGraphicsItem {
     [[nodiscard]] QRectF boundingRect() const override { return bounds_; }
     void paint(QPainter*, const QStyleOptionGraphicsItem*, QWidget*) override;
     void setLanePoints(const std::vector<QPointF>& scenePoints);
+    void setPlacement(QPointF origin, QPointF heading);
 
    private:
     EntryId id_;

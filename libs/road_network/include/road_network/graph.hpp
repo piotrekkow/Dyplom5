@@ -67,6 +67,8 @@ class Graph {
     EntityMutation<CrosswalkSeriesId> createCrosswalkSeries(NodeId at);
     EntityMutation<CrosswalkSeriesId> setCrosswalkSeriesPedestrianPath(
         CrosswalkSeriesId id, Polyline path);
+    EntityMutation<CrosswalkSeriesId> setCrosswalkSeriesWalkSpeed(
+        CrosswalkSeriesId id, float speed);
     NodeMutation removeCrosswalkSeries(CrosswalkSeriesId id);
 
     // Crosswalk

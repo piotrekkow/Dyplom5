@@ -27,10 +27,16 @@ class GraphUseCases {
     void setMovementType(MovementId id, MovementType type);
 
     void setCrosswalkSeriesPedPath(CrosswalkSeriesId id, Polyline path);
+    void setCrosswalkSeriesWalkSpeed(CrosswalkSeriesId id, float speed);
     void setCrosswalkType(CrosswalkId id, CrosswalkType type);
     void setCrosswalkLine(CrosswalkId id, Line line);
     void setCrosswalkEdge(CrosswalkId id, Crosswalk::SegmentParams edge);
     void setCrosswalkSplit(CrosswalkId id, Crosswalk::SegmentParams split);
+
+    void moveEntry(EntryId id, Position position, Vector2 heading);
+    void moveExit(ExitId id, Position position, Vector2 heading);
+    void setEntrySpeedLimit(EntryId id, float speedLimit);
+    void setExitSpeedLimit(ExitId id, float speedLimit);
 
     std::expected<std::vector<MovementId>, MovementLayoutError> setEntryLayout(
         EntryId id, std::vector<GraphEditor::MovementSpec> specs,

@@ -1,5 +1,9 @@
 #pragma once
 
+#include <expected>
+#include <unordered_map>
+
+#include "../control_errors.hpp"
 #include "road_network/util/ids.hpp"
 #include "sequence.hpp"
 
@@ -15,9 +19,7 @@ class Timing {
     [[nodiscard]] SignalConfigId at() const { return at_; }
 
     std::expected<void, TimingError> setCycleLength(int t);
-    void createNewSequence(SignalGroupId sg, int minIntervalLength);
-    std::expected<void, TimingWarning> setSgMinInterval(SignalGroupId id,
-                                                        int minIntervalLength);
+    void createNewSequence(SignalGroupId sg);
     std::expected<void, TimingError> setIntervals(
         SignalGroupId sg, std::vector<Interval> intervals);
 

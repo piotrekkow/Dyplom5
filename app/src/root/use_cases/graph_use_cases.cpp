@@ -41,7 +41,7 @@ CrosswalkSeriesId GraphUseCases::createCrosswalkSeries(NodeId at) {
 CrosswalkId GraphUseCases::createCrosswalk(CrosswalkSeriesId parent,
                                            Line line) {
     Transaction tx;
-    auto id = editor_.createCrosswalkTx(tx, parent, line);
+    auto id = ec_.createCrosswalkTx(tx, parent, line);
     cmdStack_.push(tx.commit());
     return id;
 }
@@ -74,29 +74,60 @@ void GraphUseCases::setCrosswalkSeriesPedPath(CrosswalkSeriesId id,
     cmdStack_.push(tx.commit());
 }
 
+void GraphUseCases::setCrosswalkSeriesWalkSpeed(CrosswalkSeriesId id,
+                                                float speed) {
+    Transaction tx;
+    ec_.setCrosswalkSeriesWalkSpeedTx(tx, id, speed);
+    cmdStack_.push(tx.commit());
+}
+
 void GraphUseCases::setCrosswalkType(CrosswalkId id, CrosswalkType type) {
     Transaction tx;
-    editor_.setCrosswalkTypeTx(tx, id, type);
+    ec_.setCrosswalkTypeTx(tx, id, type);
     cmdStack_.push(tx.commit());
 }
 
 void GraphUseCases::setCrosswalkLine(CrosswalkId id, Line line) {
     Transaction tx;
-    editor_.setCrosswalkLineTx(tx, id, line);
+    ec_.setCrosswalkLineTx(tx, id, line);
     cmdStack_.push(tx.commit());
 }
 
 void GraphUseCases::setCrosswalkEdge(CrosswalkId id,
                                      Crosswalk::SegmentParams edge) {
     Transaction tx;
-    editor_.setCrosswalkEdgeTx(tx, id, edge);
+    ec_.setCrosswalkEdgeTx(tx, id, edge);
     cmdStack_.push(tx.commit());
 }
 
 void GraphUseCases::setCrosswalkSplit(CrosswalkId id,
                                       Crosswalk::SegmentParams split) {
     Transaction tx;
-    editor_.setCrosswalkSplitTx(tx, id, split);
+    ec_.setCrosswalkSplitTx(tx, id, split);
+    cmdStack_.push(tx.commit());
+}
+
+void GraphUseCases::moveEntry(EntryId id, Position position, Vector2 heading) {
+    Transaction tx;
+    ec_.moveEntryTx(tx, id, position, heading);
+    cmdStack_.push(tx.commit());
+}
+
+void GraphUseCases::moveExit(ExitId id, Position position, Vector2 heading) {
+    Transaction tx;
+    ec_.moveExitTx(tx, id, position, heading);
+    cmdStack_.push(tx.commit());
+}
+
+void GraphUseCases::setEntrySpeedLimit(EntryId id, float speedLimit) {
+    Transaction tx;
+    ec_.setEntrySpeedLimitTx(tx, id, speedLimit);
+    cmdStack_.push(tx.commit());
+}
+
+void GraphUseCases::setExitSpeedLimit(ExitId id, float speedLimit) {
+    Transaction tx;
+    ec_.setExitSpeedLimitTx(tx, id, speedLimit);
     cmdStack_.push(tx.commit());
 }
 

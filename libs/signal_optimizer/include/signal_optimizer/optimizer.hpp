@@ -13,12 +13,14 @@ struct MovementGroupResult {
     std::vector<ClusterId> clusters;
     std::vector<MovementId> movements;
     bool isProtected;
+    int minGreen;
     Sequence sequence;
 };
 
 struct CrosswalkGroupResult {
     CrosswalkSeriesId seriesId;
     std::vector<CrosswalkId> crosswalks;
+    int minGreen;
     Sequence sequence;
 };
 

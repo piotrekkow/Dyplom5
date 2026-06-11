@@ -5,11 +5,12 @@
 #include <unordered_map>
 
 #include "road_network/demand/demand_data.hpp"
+#include "road_network/demand/derived/base_saturation.hpp"
 #include "road_network/graph/derived/graph_geometry.hpp"
 #include "road_network/graph/graph_data.hpp"
 
 namespace demand_compute {
-namespace {
+
 Saturation movementBaseSatTable(TurnType turn, float Qn) {
     switch (turn) {
         default:
@@ -27,7 +28,8 @@ Saturation movementBaseSatTable(TurnType turn, float Qn) {
     }
 }
 
-float computeQn(const GraphData& graph, const DemandData& demand, EntryId id) {
+float opposingFlowQn(const GraphData& graph, const DemandData& demand,
+                     EntryId id) {
     auto oppId = graph_geometry::findOpposingEntry(graph, id);
     if (!oppId) return 0.f;
 
@@ -55,6 +57,8 @@ float computeQn(const GraphData& graph, const DemandData& demand, EntryId id) {
     }
     return Qn;
 }
+
+namespace {
 
 struct MovMeta {
     float Qm;
@@ -109,7 +113,7 @@ std::unordered_map<EntryLaneId, Saturation> entryLaneSaturation(
 
     // 0.3 establish derivable movement metadata
     std::unordered_map<MovementId, MovMeta> meta;
-    float Qn = computeQn(graph, demand, id);
+    float Qn = opposingFlowQn(graph, demand, id);
 
     for (auto mId : entryMovements) {
         auto* flow = demand.flows().get(mId);

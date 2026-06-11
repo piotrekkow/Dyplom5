@@ -48,3 +48,11 @@ void EntryItem::setLanePoints(const std::vector<QPointF>& scenePoints) {
     recomputeBounds();
     update();
 }
+
+void EntryItem::setPlacement(QPointF origin, QPointF heading) {
+    prepareGeometryChange();
+    setPos(origin);
+    heading_ = heading;
+    recomputeBounds();
+    update();
+}

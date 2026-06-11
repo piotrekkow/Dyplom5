@@ -27,4 +27,8 @@ class DemandEditor {
     Demand& demand_;
     const GraphData& graph_;
     NetworkEventBus& bus_;
+
+    // schedules the deferred demand solve and publishes DemandRederived for
+    // the movement's entry and its opposing entry (mirror of onNodeStale)
+    void onDemandStale(Transaction& tx, MovementId at);
 };

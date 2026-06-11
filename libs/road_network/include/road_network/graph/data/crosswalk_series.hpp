@@ -22,6 +22,8 @@ class CrosswalkSeries {
         return pedestrianWalkSpeed_;
     }
 
+    void setPedestrianWalkSpeed(float speed) { pedestrianWalkSpeed_ = speed; }
+
     std::vector<CrosswalkId>& crosswalks() { return crosswalks_; }
     Polyline& pedestrianPath() { return pedestrianPath_; }
 

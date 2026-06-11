@@ -362,6 +362,20 @@ Graph::setCrosswalkSeriesPedestrianPath(CrosswalkSeriesId id, Polyline path) {
     return {.id = id, .at = nodeId, .undo = [apply, old] { apply(old); }};
 }
 
+Graph::EntityMutation<CrosswalkSeriesId> Graph::setCrosswalkSeriesWalkSpeed(
+    CrosswalkSeriesId id, float speed) {
+    assert(data_.crosswalkSeries().alive(id));
+    auto* cs = data_.crosswalkSeries().get(id);
+    NodeId nodeId = cs->at();
+    float old = cs->pedestrianWalkSpeed();
+    auto apply = [this, id, nodeId](float v) {
+        data_.crosswalkSeries().get(id)->setPedestrianWalkSpeed(v);
+        dirty_.insert(nodeId);
+    };
+    apply(speed);
+    return {.id = id, .at = nodeId, .undo = [apply, old] { apply(old); }};
+}
+
 Graph::NodeMutation Graph::removeCrosswalkSeries(CrosswalkSeriesId id) {
     assert(data_.crosswalkSeries().alive(id));
     auto vs = removeCrosswalkSeriesImpl(id);

@@ -46,15 +46,8 @@ std::expected<void, TimingError> Timing::setCycleLength(int t) {
     return {};
 }
 
-void Timing::createNewSequence(SignalGroupId sg, int minIntervalLength) {
-    sequences_.emplace(sg, SignalSequence(minIntervalLength));
-}
-
-std::expected<void, TimingWarning> Timing::setSgMinInterval(
-    SignalGroupId id, int minIntervalLength) {
-    if (auto* ss = std::get_if<SignalSequence>(&sequences_.at(id)))
-        return ss->setMinIntervalLength(minIntervalLength);
-    return {};
+void Timing::createNewSequence(SignalGroupId sg) {
+    sequences_.emplace(sg, SignalSequence{});
 }
 
 std::expected<void, TimingError> Timing::setIntervals(
@@ -62,7 +55,8 @@ std::expected<void, TimingError> Timing::setIntervals(
     if (!intervalsFitCycle(intervals, cycleLength_))
         return std::unexpected(TimingError::IntervalsWontFitInCycle);
     if (auto* ss = std::get_if<SignalSequence>(&sequences_.at(sg))) {
-        return ss->setIntervals(std::move(intervals));
+        ss->setIntervals(std::move(intervals));
+        return {};
     }
     return std::unexpected(
         TimingError::CannotSetIntervalsOnAlwaysActiveSequence);

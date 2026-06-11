@@ -34,12 +34,3 @@ std::expected<void, TimingError> ControlUseCases::setIntervals(
     cmdStack_.push(tx.commit());
     return {};
 }
-
-std::expected<void, TimingWarning> ControlUseCases::setMinIntervalLength(
-    TimingId timingId, SignalGroupId sgId, int min) {
-    Transaction tx;
-    auto res = editor_.setMinIntervalLengthTx(tx, timingId, sgId, min);
-    if (!res) return res;
-    cmdStack_.push(tx.commit());
-    return {};
-}

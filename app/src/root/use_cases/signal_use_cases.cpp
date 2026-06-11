@@ -58,45 +58,49 @@ void SignalUseCases::removeConfig(SignalConfigId id) {
     cmdStack_.push(tx.commit());
 }
 
-SignalGroupId SignalUseCases::addMovementGroup(SignalConfigId config,
-                                               std::vector<ClusterId> clusters,
-                                               bool isProtected,
-                                               int intervalMin) {
+std::expected<SignalGroupId, SignalGroupError>
+SignalUseCases::addMovementGroup(SignalConfigId config,
+                                 std::vector<ClusterId> clusters,
+                                 bool isProtected, int intervalMin) {
     Transaction tx;
     auto id = ec_.addMovementGroupTx(tx, config, std::move(clusters),
                                      isProtected, intervalMin);
+    if (!id) return id;
     cmdStack_.push(tx.commit());
     return id;
 }
 
-SignalGroupId SignalUseCases::addCrosswalkGroup(
-    SignalConfigId config, std::vector<CrosswalkId> crosswalks,
-    int intervalMin) {
+std::expected<SignalGroupId, SignalGroupError>
+SignalUseCases::addCrosswalkGroup(SignalConfigId config,
+                                  std::vector<CrosswalkId> crosswalks,
+                                  int intervalMin) {
     Transaction tx;
     auto id = ec_.addCrosswalkGroupTx(tx, config, std::move(crosswalks),
                                       intervalMin);
+    if (!id) return id;
     cmdStack_.push(tx.commit());
     return id;
 }
 
-SignalGroupId SignalUseCases::addTurnArrowGroup(SignalConfigId config,
-                                                MovementId movement,
-                                                int intervalMin) {
+std::expected<SignalGroupId, SignalGroupError>
+SignalUseCases::addTurnArrowGroup(SignalConfigId config, MovementId movement,
+                                  int intervalMin) {
     Transaction tx;
     auto id = ec_.addTurnArrowGroupTx(tx, config, movement, intervalMin);
+    if (!id) return id;
     cmdStack_.push(tx.commit());
     return id;
 }
 
 void SignalUseCases::setIntervalMin(SignalGroupId id, int min) {
     Transaction tx;
-    editor_.setIntervalMinTx(tx, id, min);
+    ec_.setSignalGroupIntervalMinTx(tx, id, min);
     cmdStack_.push(tx.commit());
 }
 
 void SignalUseCases::setProtected(SignalGroupId id, bool isProtected) {
     Transaction tx;
-    editor_.setProtectedTx(tx, id, isProtected);
+    ec_.setSignalGroupProtectedTx(tx, id, isProtected);
     cmdStack_.push(tx.commit());
 }
 
@@ -104,6 +108,11 @@ void SignalUseCases::removeSignalGroup(SignalGroupId id) {
     Transaction tx;
     ec_.removeSignalGroupTx(tx, id);
     cmdStack_.push(tx.commit());
+}
+
+std::vector<MovementId> SignalUseCases::eligibleTurnArrowMovements(
+    SignalConfigId config) const {
+    return editor_.eligibleTurnArrowMovements(config);
 }
 
 // for debug print purposes

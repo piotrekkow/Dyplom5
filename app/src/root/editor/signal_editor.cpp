@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <road_network/graph.hpp>
 #include <road_network/signal/data/signal_group.hpp>
+#include <unordered_set>
 #include <vector>
 
 #include "bus/network_event_bus.hpp"
@@ -99,11 +100,21 @@ void SignalEditor::removeConfigTx(Transaction& tx, SignalConfigId id) {
 //  SIGNAL GROUP TX
 //
 
-SignalGroupId SignalEditor::addMovementGroupTx(Transaction& tx,
-                                               SignalConfigId config,
-                                               std::vector<ClusterId> clusters,
-                                               bool isProtected,
-                                               int intervalMin) {
+std::expected<SignalGroupId, SignalGroupError>
+SignalEditor::addMovementGroupTx(Transaction& tx, SignalConfigId config,
+                                 std::vector<ClusterId> clusters,
+                                 bool isProtected, int intervalMin) {
+    const auto* cfg = signal_.data().configs().get(config);
+    for (SignalGroupId sgId : cfg->signalGroups()) {
+        const auto* sg = signal_.data().signalGroups().get(sgId);
+        const auto* mg = std::get_if<MovementSignalGroup>(sg);
+        if (!mg) continue;
+        for (ClusterId c : clusters)
+            if (std::ranges::find(mg->clusters(), c) != mg->clusters().end())
+                return std::unexpected(
+                    SignalGroupError::DuplicateClusterMembership);
+    }
+
     std::vector<MovementId> movements;
     for (auto c : clusters) {
         const auto& movs = graph_.data().clusters().get(c)->movements();
@@ -115,18 +126,42 @@ SignalGroupId SignalEditor::addMovementGroupTx(Transaction& tx,
                                         intervalMin));
 }
 
-SignalGroupId SignalEditor::addCrosswalkGroupTx(
-    Transaction& tx, SignalConfigId config,
-    std::vector<CrosswalkId> crosswalks, int intervalMin) {
+std::expected<SignalGroupId, SignalGroupError>
+SignalEditor::addCrosswalkGroupTx(Transaction& tx, SignalConfigId config,
+                                  std::vector<CrosswalkId> crosswalks,
+                                  int intervalMin) {
+    const auto* cfg = signal_.data().configs().get(config);
+    for (SignalGroupId sgId : cfg->signalGroups()) {
+        const auto* sg = signal_.data().signalGroups().get(sgId);
+        const auto* cg = std::get_if<CrosswalkSignalGroup>(sg);
+        if (!cg) continue;
+        for (CrosswalkId c : crosswalks)
+            if (std::ranges::find(cg->crosswalks(), c) !=
+                cg->crosswalks().end())
+                return std::unexpected(
+                    SignalGroupError::DuplicateCrosswalkMembership);
+    }
     return addSignalGroupTx(tx, signal_.createCrosswalkGroup(
                                     config, std::move(crosswalks),
                                     intervalMin));
 }
 
-SignalGroupId SignalEditor::addTurnArrowGroupTx(Transaction& tx,
-                                                SignalConfigId config,
-                                                MovementId movement,
-                                                int intervalMin) {
+std::expected<SignalGroupId, SignalGroupError>
+SignalEditor::addTurnArrowGroupTx(Transaction& tx, SignalConfigId config,
+                                  MovementId movement, int intervalMin) {
+    const auto* turn = graph_.derived().turnTypes().get(movement);
+    if (!turn || *turn != TurnType::RIGHT)
+        return std::unexpected(
+            SignalGroupError::MovementNotEligibleForTurnArrow);
+
+    const auto* cfg = signal_.data().configs().get(config);
+    for (SignalGroupId sgId : cfg->signalGroups()) {
+        const auto* sg = signal_.data().signalGroups().get(sgId);
+        const auto* tg = std::get_if<ConditionalTurnArrowSignalGroup>(sg);
+        if (tg && tg->movement() == movement)
+            return std::unexpected(
+                SignalGroupError::DuplicateTurnArrowForMovement);
+    }
     return addSignalGroupTx(
         tx, signal_.createTurnArrowGroup(config, movement, intervalMin));
 }
@@ -149,6 +184,13 @@ void SignalEditor::setProtectedTx(Transaction& tx, SignalGroupId id,
                   SignalGroupChanged{id, mut.config, mut.at});
     tx.recordEvent(bus_.signalGroupChanged,
                    SignalGroupChanged{id, mut.config, mut.at});
+    tx.addSolve(SolvePriority::SIGNAL,
+                [this] { signal_.solve(graph_.derived()); });
+}
+
+void SignalEditor::markConfigStaleTx(Transaction& tx, SignalConfigId id) {
+    signal_.markStale(id);
+    tx.recordUndoSilent([this, id] { signal_.markStale(id); });
     tx.addSolve(SolvePriority::SIGNAL,
                 [this] { signal_.solve(graph_.derived()); });
 }
@@ -224,6 +266,36 @@ std::vector<SignalGroupId> SignalEditor::groupsReferencingCrosswalk(
                 if (std::ranges::find(g->crosswalks(), id) !=
                     g->crosswalks().end())
                     result.push_back(sgId);
+            }
+        }
+    }
+    return result;
+}
+
+std::vector<MovementId> SignalEditor::eligibleTurnArrowMovements(
+    SignalConfigId config) const {
+    std::vector<MovementId> result;
+    const auto* cfg = signal_.data().configs().get(config);
+    if (!cfg) return result;
+    const auto* intersection = signal_.data().intersections().get(cfg->at());
+    if (!intersection) return result;
+
+    std::unordered_set<MovementId> taken;
+    for (SignalGroupId sgId : cfg->signalGroups()) {
+        const auto* sg = signal_.data().signalGroups().get(sgId);
+        if (const auto* tg = std::get_if<ConditionalTurnArrowSignalGroup>(sg))
+            taken.insert(tg->movement());
+    }
+
+    for (NodeId nId : intersection->nodes()) {
+        const auto* node = graph_.data().nodes().get(nId);
+        if (!node) continue;
+        for (EntryId eId : node->entries()) {
+            for (MovementId mId :
+                 graph_.data().entries().get(eId)->movements()) {
+                const auto* turn = graph_.derived().turnTypes().get(mId);
+                if (turn && *turn == TurnType::RIGHT && !taken.contains(mId))
+                    result.push_back(mId);
             }
         }
     }

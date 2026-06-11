@@ -2,6 +2,7 @@
 
 #include <qnamespace.h>
 
+#include <QGraphicsView>
 #include <QPainter>
 
 #include "ui/network/items/crosswalk_item.hpp"
@@ -243,4 +244,21 @@ void NetworkScene::clearBackdrop() {
     removeItem(backdropItem_);
     delete backdropItem_;
     backdropItem_ = nullptr;
+}
+void NetworkScene::mousePressEvent(QGraphicsSceneMouseEvent* event) {
+    if (event->button() == Qt::LeftButton) {
+        // debug: domain coordinates for authoring demo data
+        Position p = CoordTransform{}.toDomain(event->scenePos());
+        qDebug().noquote().nospace()
+            << "{.x = " << QString::number(static_cast<double>(p.x), 'f', 1)
+            << "f, .y = " << QString::number(static_cast<double>(p.y), 'f', 1)
+            << "f},";
+
+        const QTransform viewXf =
+            views().isEmpty() ? QTransform() : views().first()->transform();
+        QGraphicsItem* hit = itemAt(event->scenePos(), viewXf);
+        if (hit == backdropItem_) hit = nullptr;
+        emit itemClicked(hit);
+    }
+    QGraphicsScene::mousePressEvent(event);
 }

@@ -9,13 +9,18 @@ struct NetworkEventBus {
     EventBus<NodeRederived> nodeRederived;
 
     EventBus<EntryCreated> entryCreated;
+    EventBus<EntryMoved> entryMoved;
+    EventBus<EntrySpeedLimitChanged> entrySpeedLimitChanged;
     EventBus<EntryRemoved> entryRemoved;
 
     EventBus<ExitCreated> exitCreated;
+    EventBus<ExitMoved> exitMoved;
+    EventBus<ExitSpeedLimitChanged> exitSpeedLimitChanged;
     EventBus<ExitRemoved> exitRemoved;
 
     EventBus<CrosswalkSeriesCreated> crosswalkSeriesCreated;
     EventBus<CrosswalkSeriesUpdated> crosswalkSeriesUpdated;
+    EventBus<CrosswalkSeriesWalkSpeedChanged> crosswalkSeriesWalkSpeedChanged;
     EventBus<CrosswalkSeriesRemoved> crosswalkSeriesRemoved;
     EventBus<CrosswalkCreated> crosswalkCreated;
     EventBus<CrosswalkUpdated> crosswalkUpdated;
@@ -36,6 +41,8 @@ struct NetworkEventBus {
 
     EventBus<SaturationOverrideChanged> saturationOverrideChanged;
     EventBus<SaturationOverrideErased> saturationOverrideErased;
+
+    EventBus<DemandRederived> demandRederived;
 
     EventBus<StreamPermittedOverrideChanged> streamPermittedOverrideChanged;
     EventBus<StreamPermittedOverrideErased> streamPermittedOverrideErased;
@@ -60,4 +67,7 @@ struct NetworkEventBus {
     EventBus<TimingRemoved> timingRemoved;
 
     EventBus<SequenceChanged> sequenceChanged;
+
+    EventBus<TimingValidityChanged> timingValidityChanged;
+    EventBus<ConfigCompletenessChanged> configCompletenessChanged;
 };

@@ -47,3 +47,11 @@ void ExitItem::setLanePoints(const std::vector<QPointF>& scenePoints) {
     recomputeBounds();
     update();
 }
+
+void ExitItem::setPlacement(QPointF origin, QPointF heading) {
+    prepareGeometryChange();
+    setPos(origin);
+    heading_ = heading;
+    recomputeBounds();
+    update();
+}

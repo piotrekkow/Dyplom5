@@ -10,6 +10,7 @@ add_executable(Dyplom5
     src/root/application.cpp
     # src/root/document.cpp
     src/root/editor_context.cpp
+    src/root/destroy_query.cpp
 
     src/root/editor/graph_editor.cpp
     src/root/editor/demand_editor.cpp
@@ -25,6 +26,7 @@ add_executable(Dyplom5
 
     src/ui/main_window.cpp
     src/ui/coord_transform.cpp
+    src/ui/direction_label.cpp
     src/ui/network/network_scene.cpp
     src/ui/network/network_view.cpp
     src/ui/network/network_scene_populator.cpp

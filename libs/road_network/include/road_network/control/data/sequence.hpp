@@ -1,29 +1,24 @@
 #pragma once
 
-#include <expected>
 #include <variant>
 #include <vector>
 
-#include "../control_errors.hpp"
 #include "interval.hpp"
 
+// Interval-min limits live on the SignalGroup (signal domain); violations are
+// flagged by the control validation pass instead of being rejected here.
 class SignalSequence {
    public:
-    SignalSequence(int minIntervalLength)
-        : minIntervalLength_(minIntervalLength) {}
-
     [[nodiscard]] const std::vector<Interval>& intervals() const {
         return intervals_;
     }
-    [[nodiscard]] int minIntervalLength() const { return minIntervalLength_; }
 
-    std::expected<void, TimingWarning> setMinIntervalLength(int min);
-    std::expected<void, TimingError> setIntervals(
-        std::vector<Interval> intervals);
+    void setIntervals(std::vector<Interval> intervals) {
+        intervals_ = std::move(intervals);
+    }
 
    private:
     std::vector<Interval> intervals_;
-    int minIntervalLength_;
 };
 
 // signals of this group always display active signal aspect

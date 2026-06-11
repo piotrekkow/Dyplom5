@@ -28,6 +28,16 @@ class GraphEditor {
     void setExitLanesTx(Transaction& tx, ExitId at,
                         std::vector<ExitLaneSpec> specs);
 
+    // position + heading move as one gesture, mirroring create
+    void moveEntryTx(Transaction& tx, EntryId id, Position position,
+                     Vector2 heading);
+    void moveExitTx(Transaction& tx, ExitId id, Position position,
+                    Vector2 heading);
+    void setEntrySpeedLimitTx(Transaction& tx, EntryId id, float speedLimit);
+    void setExitSpeedLimitTx(Transaction& tx, ExitId id, float speedLimit);
+    void setCrosswalkSeriesWalkSpeedTx(Transaction& tx, CrosswalkSeriesId id,
+                                       float speed);
+
     void setMovementPathSpecTx(Transaction& tx, MovementId id,
                                MovementPathSpec spec);
     std::expected<void, MovementSplitError> setMovementSplitsTx(

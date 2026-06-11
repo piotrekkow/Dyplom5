@@ -67,6 +67,10 @@ class Signal {
     GroupMutation setProtected(SignalGroupId id, bool isProtected);
     GroupMutation removeSignalGroup(SignalGroupId id);
 
+    // External invalidation: graph-side parameter changes (stream intergreen /
+    // permitted maps, speeds, geometry) feed the config's intergreen matrix.
+    void markStale(SignalConfigId id) { dirty_.insert(id); }
+
     void solve(const GraphDerived& graphDerived) {
         for (SignalConfigId id : dirty_) recomputeDerived(graphDerived, id);
         dirty_.clear();

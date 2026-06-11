@@ -26,10 +26,12 @@ class NetworkScenePopulator {
     EventBus<NodeRemoved>::Subscription nodeRemoved_;
 
     EventBus<EntryCreated>::Subscription entryCreated_;
+    EventBus<EntryMoved>::Subscription entryMoved_;
     EventBus<EntryLanesChanged>::Subscription entryLanesChanged_;
     EventBus<EntryRemoved>::Subscription entryRemoved_;
 
     EventBus<ExitCreated>::Subscription exitCreated_;
+    EventBus<ExitMoved>::Subscription exitMoved_;
     EventBus<ExitLanesChanged>::Subscription exitLanesChanged_;
     EventBus<ExitRemoved>::Subscription exitRemoved_;
 

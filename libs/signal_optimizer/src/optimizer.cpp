@@ -329,10 +329,8 @@ std::unordered_map<GId, Sequence> computeSequences(const GConfig& bestCfg,
         if (alwaysActive) {
             sequences[gid] = AlwaysActive{};
         } else {
-            SignalSequence seq{g.tMin};
-            static_cast<void>(
-                seq.setIntervals(  // NOLINT(bugprone-unused-return-value)
-                    std::move(ivs)));
+            SignalSequence seq{};
+            seq.setIntervals(std::move(ivs));
             sequences[gid] = std::move(seq);
         }
     }
@@ -352,12 +350,14 @@ signal_optimizer::OptimizeResult compileResult(
             out.cgResults.push_back(signal_optimizer::CrosswalkGroupResult{
                 .seriesId = series.id,
                 .crosswalks = series.crosswalks,
+                .minGreen = g.tMin,
                 .sequence = std::move(seq),
             });
         } else {
             const auto& entry = inp.entries[g.entryIdx];
             signal_optimizer::MovementGroupResult mgr;
             mgr.isProtected = (g.kind == GKind::Protected);
+            mgr.minGreen = g.tMin;
             mgr.sequence = std::move(seq);
             for (int ci : g.clusterIdxs)
                 mgr.clusters.push_back(entry.clusters[ci].id);
