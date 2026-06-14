@@ -6,6 +6,13 @@
 
 #include "types.hpp"
 
+namespace {
+    int effClearance(const GConfig& cfg, GId ev, GId ap) {
+        int ig = cfg.intergreen[ev][ap];
+        return cfg.groups[ev].kind == GKind::Crosswalk ? std::max(ig + 4, 4) : std::max(ig, 3);
+    }
+}
+
 GTransition computeTransitionSimple(const GPhase& from, const GPhase& to,
                                     const GConfig& cfg) {
     std::unordered_set<GId> fromSet(from.groupIds.begin(), from.groupIds.end());
@@ -102,7 +109,7 @@ GTransition computeTransitionWeighted(const GPhase& from, const GPhase& to,
             int ceiling = makespan;
             for (GId t : toOnly) {
                 int bound = (processed.count(t) ? startTime[t] : makespan) -
-                            cfg.intergreen[g][t];
+                            effClearance(cfg, g, t);
                 ceiling = std::min(ceiling, bound);
             }
             greenEnd[g] = std::max(0, ceiling);
@@ -113,7 +120,7 @@ GTransition computeTransitionWeighted(const GPhase& from, const GPhase& to,
             // this startTime via the processed-set ceiling above.
             int floor = 0;
             for (GId f : fromOnly)
-                floor = std::max(floor, greenEnd[f] + cfg.intergreen[f][g]);
+                floor = std::max(floor, greenEnd[f] + effClearance(cfg, f, g));
             startTime[g] = floor;
         }
         processed.insert(g);

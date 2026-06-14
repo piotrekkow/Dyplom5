@@ -67,20 +67,20 @@ class NetworkScene : public QGraphicsScene {
     void setBackdrop(const QString& path, QPointF origin, qreal mpp);
     void clearBackdrop();
 
-    // debug
-   protected:
-    void mousePressEvent(QGraphicsSceneMouseEvent* event) override {
-        CoordTransform xf;
-        QPointF sp = event->scenePos();
-        Position p = xf.toDomain(sp);
-        qDebug().noquote().nospace()
-            << "{.x = " << QString::number(static_cast<double>(p.x), 'f', 1)
-            << "f, .y = " << QString::number(static_cast<double>(p.y), 'f', 1)
-            << "f},";
+   // // debug
+   //protected:
+   // void mousePressEvent(QGraphicsSceneMouseEvent* event) override {
+   //     CoordTransform xf;
+   //     QPointF sp = event->scenePos();
+   //     Position p = xf.toDomain(sp);
+   //     qDebug().noquote().nospace()
+   //         << "{.x = " << QString::number(static_cast<double>(p.x), 'f', 1)
+   //         << "f, .y = " << QString::number(static_cast<double>(p.y), 'f', 1)
+   //         << "f},";
 
-        QGraphicsScene::mousePressEvent(event);
-    }
-    // debug
+   //     QGraphicsScene::mousePressEvent(event);
+   // }
+   // // debug
 
    private:
     std::unordered_map<NodeId, NodeItem*> nodeItems_;

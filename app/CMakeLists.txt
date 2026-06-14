@@ -2,6 +2,8 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
+set(CMAKE_PREFIX_PATH "C:/Qt/6.11.1/msvc2022_64")
+
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
 
 add_executable(Dyplom5
@@ -53,9 +55,15 @@ if(WIN32)
     # Run windeployqt after the build finishes
     add_custom_command(TARGET Dyplom5 POST_BUILD
         COMMAND "${WINDEPLOYQT_EXECUTABLE}" 
-                --no-compiler-runtime # We'll handle compiler runtime (MinGW) separately if needed, or let it copy standard
                 --no-translations     # Optional: skips copying huge translation files to keep build fast
                 "$<TARGET_FILE:Dyplom5>"
         COMMENT "Running windeployqt to copy DLLs..."
     )
 endif()
+
+add_custom_command(TARGET Dyplom5 POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets"
+        "$<TARGET_FILE_DIR:Dyplom5>/assets"
+    COMMENT "Copying app assets to runtime folder"
+)

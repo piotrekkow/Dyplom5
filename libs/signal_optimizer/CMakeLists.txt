@@ -1,3 +1,4 @@
+
 add_library(signal_optimizer_lib
     src/optimizer.cpp
     src/config_generator.cpp

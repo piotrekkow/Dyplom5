@@ -2,6 +2,8 @@
 
 #include <QCoreApplication>
 #include <QDebug>
+#include <QDir>
+#include <QFileInfo>
 
 #include "road_network/graph/data/movement.hpp"
 #include "road_network/signal/data/interval.hpp"
@@ -30,10 +32,9 @@ Application::~Application() {
 
 void Application::show() {
     window_->show();
-    window_->scene()->setBackdrop(
-        QCoreApplication::applicationDirPath() +
-            "/../../app/assets/Lazurowa-Czluchowska.jpg",
-        {-100, -70}, 0.041667);
+
+    QString backdropPath = QCoreApplication::applicationDirPath() + "/assets/Lazurowa-Czluchowska.jpg";
+    window_->scene()->setBackdrop(backdropPath, {-100, -70}, 0.041667);
     auto& g = editorCtx_->graph();
     auto& d = editorCtx_->demand();
     auto& s = editorCtx_->signal();
@@ -179,25 +180,24 @@ void Application::show() {
 
     g.setStreamIntergreenOverride(n1, m1n.value()[0], m1s.value()[0], 7, 7);
     g.setStreamIntergreenOverride(n1, m1e.value()[0], m1w.value()[0], 7, 7);
-    // g.setStreamPermittedOverride(n1, m1n.value()[0], m1s.value()[0], false);
 
     // demand
-    d.setFlow(m1n.value()[0], Flow(255));  // 255
+    d.setFlow(m1n.value()[0], Flow(255));
     d.setFlow(m1n.value()[1], Flow(1150));
     d.setFlow(m1n.value()[2], Flow(100));
 
-    d.setFlow(m1s.value()[0], Flow(60));   // 60
-    d.setFlow(m1s.value()[1], Flow(100));  // 100
+    d.setFlow(m1s.value()[0], Flow(60)); 
+    d.setFlow(m1s.value()[1], Flow(100));
     d.setFlow(m1s.value()[2], Flow(1000));
     d.setFlow(m1s.value()[3], Flow(219));
 
-    d.setFlow(m1e.value()[0], Flow(1));  // 280
-    d.setSaturationOverride(m1e.value()[0], {.prot = std::nullopt, .perm = 0});
+    d.setFlow(m1e.value()[0], Flow(280));
+    // d.setSaturationOverride(m1e.value()[0], {.prot = std::nullopt, .perm = 0});
     d.setFlow(m1e.value()[1], Flow(800));
     d.setFlow(m1e.value()[2], Flow(255));
 
-    d.setFlow(m1w.value()[0], Flow(1));  // 145
-    d.setSaturationOverride(m1w.value()[0], {.prot = std::nullopt, .perm = 0});
+    d.setFlow(m1w.value()[0], Flow(145)); 
+    // d.setSaturationOverride(m1w.value()[0], {.prot = std::nullopt, .perm = 0});
     d.setFlow(m1w.value()[1], Flow(500));
     d.setFlow(m1w.value()[2], Flow(155));
 
@@ -211,7 +211,7 @@ void Application::show() {
                              document_->demand());
 
     // MANUAL IMPROVEMENT
-    const auto& groups =
+    /*const auto& groups =
         document_->signal().data().nodeSignals().get(n1)->signalGroups;
     auto i11 = s.setIntervals(*t1, groups[11], {Interval(3, 32, 0, 4)});
     auto i5 = s.setIntervals(*t1, groups[5], {Interval(42, 86 - 42, 1, 3)});
@@ -224,5 +224,5 @@ void Application::show() {
     if (!i10) qDebug() << "no i10";
     if (!i7) qDebug() << "no i7";
     debug_print::nodeTimings(n1, document_->signal(), document_->graph(),
-                             document_->demand());
+                             document_->demand());*/
 }

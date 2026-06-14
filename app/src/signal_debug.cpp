@@ -12,6 +12,7 @@
 #include <road_network/util/overloaded.hpp>
 #include <string>
 #include <vector>
+#include <sstream>
 
 namespace {
 const char* aspectStr(SignalAspect a) {
@@ -72,7 +73,7 @@ std::vector<SignalAspect> buildTimeline(SignalGroupId sgId,
                         appr[static_cast<size_t>(i)];
 
                 for (int i = 0; i < iv.greenDuration(); ++i)
-                    result[static_cast<size_t>((iv.greenStart() + i) % T)] =
+                    result[static_cast<size_t>(((iv.greenStart() + i) % T + T )% T)] =
                         SignalAspect::GREEN;
 
                 auto evac = g.atomicTransitionEvac();
@@ -243,7 +244,7 @@ void printThroughputTable(const std::vector<ThroughputRow>& rows) {
                              + 6    // teg
                              + 10   // C
                              + 8    // Q/C
-                             + 8    // d(s)
+                             + 8    // d
                              + 10   // Q*d
                              + 10;  // Q*d/D%
 
@@ -280,7 +281,7 @@ void printThroughputTable(const std::vector<ThroughputRow>& rows) {
 
               << std::right << std::setw(8) << "Q" << std::setw(8) << "S_adj"
               << std::setw(6) << "teg" << std::setw(10) << "C" << std::setw(8)
-              << "Q/C" << std::setw(8) << "d(s)" << std::setw(10) << "Q*d"
+              << "Q/C" << std::setw(8) << "d" << std::setw(10) << "Q*d"
               << std::setw(10) << "Q*d/D%"
               << "\n";
 

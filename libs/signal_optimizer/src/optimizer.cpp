@@ -160,7 +160,7 @@ std::optional<OptimizerRawResult> pickBest(const std::vector<GConfig>& configs,
         futures.push_back(std::async(std::launch::async, [&, ci]() {
             const auto& cfg = configs[ci];
 
-            auto validPhases = findAllCliques(cfg);
+            auto validPhases = findMaximalCliques(cfg);
             if (validPhases.empty()) {
                 reportProgress();
                 return;
