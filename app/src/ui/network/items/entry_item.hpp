@@ -23,7 +23,7 @@ class EntryItem : public QGraphicsItem {
     QRectF bounds_;
     std::vector<QPointF> lanePoints_;
 
-    inline static const QPen entryPen_{QColor("#78cc8c"), 0.3};
+    inline static const QPen entryPen_{QColor("#1cac3e"), 0.3};
     static constexpr qreal handleRadius_ = 1.0;
     static constexpr qreal handleArrowLength_ = 3.0;
     static constexpr qreal handleArrowTipLength_ = 0.5;
