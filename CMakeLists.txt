@@ -5,9 +5,9 @@ set(CMAKE_CXX_STANDARD 23) # std::move_only_function, std::expected
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-find_package(GTest REQUIRED)
-enable_testing()
-include(GoogleTest)
+# find_package(GTest REQUIRED)
+# enable_testing()
+# include(GoogleTest)
 
 add_subdirectory(libs/common)
 add_subdirectory(libs/control)
@@ -16,6 +16,10 @@ add_subdirectory(libs/regulations)
 add_subdirectory(libs/road_network)
 add_subdirectory(libs/signal_optimizer)
 add_subdirectory(app)
+
+if(MINGW AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_link_libraries(signal_optimizer_lib PUBLIC stdc++exp)
+endif()
 
 if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_options(Dyplom6 PRIVATE
