@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 #include "command/undo_command.hpp"
 
 class CommandStack {
@@ -14,7 +16,8 @@ class CommandStack {
         undoStack_.pop_back();
 
         for (auto& u : cmd.undos) u();
-        for (auto& [_, s] : cmd.solves) s();
+        for (auto& [_, s] : cmd.solves) s.rederive();
+        for (auto& [_, s] : cmd.solves) s.flush();
         for (auto& e : cmd.undoEvents) e();
     }
 

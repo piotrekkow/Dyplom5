@@ -1,73 +1,61 @@
 #pragma once
 
-#include <expected>
-#include <unordered_set>
-#include <vector>
-
 #include "control/control_data.hpp"
 #include "control/control_derived.hpp"
-#include "control/control_errors.hpp"
-#include "control/data/interval.hpp"
-#include "util/ids.hpp"
-#include <functional>
+#include "road_network/util/ids.hpp"
+#include "util/mutation_base.hpp"
 
-class GraphData;
-class SignalData;
-class SignalDerived;
+struct Regulations;
+class Signal;
+class Graph;
 
-class Control {
+class Control : public MutationBase<NodeId> {
    public:
+    using Base = MutationBase<NodeId>;
+    friend Base;
+
+    explicit Control(const Regulations& regulations)
+        : regulations_(regulations) {}
+
     const ControlData& data() const { return data_; }
     const ControlDerived& derived() const { return derived_; }
 
-    struct ConfigMutation {
-        SignalConfigId id;
-        std::move_only_function<void()> undo;
+    EMut<TimingId, NodeId> createTiming(NodeId at, std::string name);
+    EMut<TimingId, NodeId> setParams(TimingId id, Timing::Params p);
+    EMut<TimingId, NodeId> removeTiming(TimingId id);
+
+    EMut<StageId, NodeId> createStage(NodeId at,
+                                      control::Stage<SignalGroupId> stage);
+    EMut<StageId, NodeId> setParams(StageId id, Stage::Params p);
+    EMut<StageId, NodeId> removeStage(StageId id);
+
+    EMut<StageTransitionId, NodeId> createTransition(NodeId at, StageId from,
+                                                     StageId to);
+    EMut<StageTransitionId, NodeId> setParams(StageTransitionId id,
+                                              StageTransition::Params p);
+    EMut<StageTransitionId, NodeId> removeTransition(StageTransitionId id);
+
+    struct Rederived {
+        std::unordered_set<NodeId> nodes;
     };
+    Rederived solve(const Signal& signal, const Graph& graph);
 
-    template <typename EntityId>
-    struct EntityMutation {
-        EntityId id;
-        SignalConfigId at;
-        std::move_only_function<void()> undo;
-    };
-
-    struct TimingMutation {
-        TimingId timingId;
-        SignalGroupId sgId;
-        SignalConfigId at;
-        std::move_only_function<void()> undo;
-    };
-
-    // timing lifecycle
-    EntityMutation<TimingId> createTiming(SignalConfigId at, int cycleLength);
-    ConfigMutation removeTiming(TimingId id);
-
-    // timing sequence mutations
-    TimingMutation createSequence(TimingId id, SignalGroupId sg);
-    TimingMutation removeSequence(TimingId id, SignalGroupId sg);
-    TimingMutation setAlwaysActive(TimingId id, SignalGroupId sg);
-    std::expected<TimingMutation, TimingError> setIntervals(
-        TimingId id, SignalGroupId sg, std::vector<Interval> intervals);
-
-    // Validation pass: re-checks timing validity and config completeness of
-    // dirty configs against the current graph/signal state. Mutations mark
-    // their config dirty; external parameter changes (group intervalMin,
-    // intergreen matrix, cluster/crosswalk structure) are flagged via
-    // markStale by the coordinating layer.
-    void markStale(SignalConfigId id) { dirty_.insert(id); }
-    void solve(const GraphData& graph, const SignalData& signal,
-               const SignalDerived& signalDerived);
+    NodeId parentOf(TimingId) const;
+    NodeId parentOf(StageId) const;
+    NodeId parentOf(StageTransitionId) const;
 
    private:
     ControlData data_;
     ControlDerived derived_;
+    const Regulations& regulations_;
 
-    std::unordered_set<SignalConfigId> dirty_;
-    void recomputeDerived(const GraphData& graph, const SignalData& signal,
-                          const SignalDerived& signalDerived,
-                          SignalConfigId id);
+    void recomputeDerived(NodeId id, const Signal& signal);
+    void evictDerived(NodeId id);
 
-    void createTimingImpl(SlotMap<TimingTag, Timing>::VacatedSlot vs);
-    SlotMap<TimingTag, Timing>::VacatedSlot removeTimingImpl(TimingId id);
+    void link(TimingId);
+    void link(StageId);
+    void link(StageTransitionId);
+    void unlink(TimingId);
+    void unlink(StageId);
+    void unlink(StageTransitionId);
 };

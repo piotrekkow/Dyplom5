@@ -1,8 +1,7 @@
 #pragma once
-
 #include <optional>
 
 struct SaturationOverride {
-    std::optional<float> prot;
-    std::optional<float> perm;
+    std::optional<double> prot;
+    std::optional<double> perm;
 };

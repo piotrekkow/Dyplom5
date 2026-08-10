@@ -1,33 +1,36 @@
 #pragma once
 
-#include "road_network/graph/derived/turn_type.hpp"
-#include "road_network/util/geometry/polyline.hpp"
-#include "road_network/util/geometry/position.hpp"
+#include <geometry/polyline.hpp>
+#include <optional>
+
+#include "road_network/graph/data/boundary/entry_lane_spec.hpp"
+#include "road_network/graph/data/connector/movement_path_spec.hpp"
 #include "road_network/util/ids.hpp"
 
 class GraphData;
 
 namespace graph_geometry {
-struct MovementPolyline {
-    Polyline poly;
-    float stopOffset;
+std::vector<Position> lanePositions(const GraphData& data, EntryId id,
+                                    bool withStopOffset = true);
+std::vector<Position> lanePositions(const GraphData& data, ExitId id);
+std::vector<Polyline> entryStopBars(const GraphData& data, EntryId id,
+                                    const std::vector<EntryLaneSpec>& lanes);
+std::vector<Polyline> exitLaneBars(const GraphData& data, ExitId id,
+                                   const std::vector<double>& widths);
+
+// mid - midpoint, dir - heading
+struct MovementAnchors {
+    Position eMid;
+    Vector2 eDir;
+    Position xMid;
+    Vector2 xDir;
 };
+std::optional<MovementAnchors> movementAnchors(const GraphData& data,
+                                               MovementId id);
 
-std::vector<Position> lanePositions(const GraphData& data, AdapterId at);
-std::vector<MovementPolyline> movementPolylines(const GraphData& data,
-                                                MovementId id);
-float classifyAngle(const GraphData& data, EntryId entry, ExitId exit);
-float classifyAngle(const GraphData& data, MovementId id);
-TurnType classifyTurn(const GraphData& data, MovementId id);
-bool isValidMovementOrder(const GraphData& data, EntryId id);
+std::vector<Polyline> movementPolylines(const GraphData& data, MovementId id);
 
-// opposing threshold - angle in rad relative to original entry heading >= to be
-// considered opposing (-x, x) is not opposing.
-std::optional<EntryId> findOpposingEntry(const GraphData& data, EntryId id,
-                                         float opposingThreshold = 2.35619f);
-
-// opposing threshold - angle in rad relative to original entry heading >= to be
-// considered opposing (-x, x) is not opposing.
-bool isOpposingEntry(const GraphData& data, MovementId id, MovementId candidate,
-                     float opposingThreshold = 2.35619f);
+// For a candidate spec instead of the stored one — for ui drag previews
+std::vector<Polyline> movementPolylines(const GraphData& data, MovementId id,
+                                        const MovementPathSpec& spec);
 }  // namespace graph_geometry

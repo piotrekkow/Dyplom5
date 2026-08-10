@@ -1,32 +1,22 @@
-add_library(road_network_lib
+add_library(road_network
     src/graph.cpp
     src/demand.cpp
     src/signal.cpp
     src/control.cpp
 
-    src/util/geometry/line.cpp
-    src/util/geometry/polyline.cpp
-    src/util/geometry/position.cpp
-    src/util/geometry/vector2.cpp
-
+    src/derived/compute_helpers.cpp
     src/derived/graph_compute.cpp
     src/derived/graph_geometry.cpp
     src/derived/demand_compute.cpp
     src/derived/signal_compute.cpp
-   
-    src/data/flow.cpp
-    src/data/timing.cpp
-
     src/derived/control_compute.cpp
 )
-target_include_directories(road_network_lib 
+target_include_directories(road_network
     PUBLIC include
     PRIVATE src
 )
 
-# ── Tests ─────────────────────────────────────────────────────────────────────
-# add_executable(road_network_tests
-
-# )
-# target_link_libraries(road_network_tests PRIVATE road_network_lib GTest::gtest_main)
-# gtest_discover_tests(road_network_tests)
+target_link_libraries(road_network PUBLIC common)
+target_link_libraries(road_network PUBLIC control)
+target_link_libraries(road_network PUBLIC geometry)
+target_link_libraries(road_network PUBLIC regulations)

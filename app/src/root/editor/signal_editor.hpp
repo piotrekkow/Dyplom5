@@ -1,82 +1,58 @@
 #pragma once
 
 #include <expected>
-#include <optional>
-#include <road_network/signal.hpp>
-#include <road_network/util/ids.hpp>
-#include <string>
-#include <vector>
+#include <regulations/types/signal_kind.hpp>
+#include <unordered_set>
 
-#include "errors/signal_errors.hpp"
+#include "bus/dirty_event_bus.hpp"
+#include "bus/impl/dirty_events.hpp"
+#include "bus/subscription_bag.hpp"
+#include "root/editor/util/editor_errors.hpp"
 
-class Graph;
+class Signal;
 class NetworkEventBus;
+class Graph;
 class Transaction;
+class DirtyEventBus;
+class Regulations;
 
 class SignalEditor {
    public:
-    SignalEditor(Signal& signal, const Graph& graph, NetworkEventBus& bus);
+    SignalEditor(Signal& signal, const Graph& graph, NetworkEventBus& bus,
+                 DirtyEventBus& dirty, const Regulations& regulations);
 
-    // Intersection Tx
-    // pre: every node is alive and not part of another intersection
-    IntersectionId createIntersectionTx(Transaction& tx,
-                                        const std::vector<NodeId>& nodes,
-                                        std::string name);
-    void addNodeToIntersectionTx(Transaction& tx, IntersectionId id,
-                                 NodeId node);
-    void removeNodeFromIntersectionTx(Transaction& tx, IntersectionId id,
-                                      NodeId node);
-    // Tx half of a cross-domain cascade — EditorContext removes the
-    // intersection's configs first; detaches remaining nodes itself
-    void removeIntersectionTx(Transaction& tx, IntersectionId id);
+    std::expected<SignalGroupId, SignalGroupErrors> createMovementGroup(
+        Transaction& tx, NodeId node, std::vector<ClusterId> clusters);
+    std::expected<SignalGroupId, SignalGroupErrors> createCrosswalkGroup(
+        Transaction& tx, NodeId node, std::vector<CrosswalkId> crosswalks);
 
-    // Config Tx
-    SignalConfigId createConfigTx(Transaction& tx, IntersectionId at,
-                                  std::string name);
-    void renameConfigTx(Transaction& tx, SignalConfigId id, std::string name);
+    std::expected<void, SignalGroupErrors> setSgProtection(Transaction& tx,
+                                                           SignalGroupId id,
+                                                           bool request);
+    void setSgIntervalMinFixed(Transaction& tx, SignalGroupId id, int min);
 
-    // Signal group Tx — duplicate-membership / turn-arrow constraints are
-    // validated here, before any mutation
-    std::expected<SignalGroupId, SignalGroupError> addMovementGroupTx(
-        Transaction& tx, SignalConfigId config, std::vector<ClusterId> clusters,
-        bool isProtected, int intervalMin);
-    std::expected<SignalGroupId, SignalGroupError> addCrosswalkGroupTx(
-        Transaction& tx, SignalConfigId config,
-        std::vector<CrosswalkId> crosswalks, int intervalMin);
-    std::expected<SignalGroupId, SignalGroupError> addTurnArrowGroupTx(
-        Transaction& tx, SignalConfigId config, MovementId movement,
-        int intervalMin);
-    void setIntervalMinTx(Transaction& tx, SignalGroupId id, int min);
-    void setProtectedTx(Transaction& tx, SignalGroupId id, bool isProtected);
+    void removeSignalGroup(Transaction& tx, SignalGroupId id);
 
-    // graph-side parameters feeding the config's intergreen matrix changed —
-    // schedule a recompute
-    void markConfigStaleTx(Transaction& tx, SignalConfigId id);
-
-    // Tx halves of cross-domain cascades — called only by EditorContext,
-    // which cleans the control domain first
-    void removeSignalGroupTx(Transaction& tx, SignalGroupId id);
-    void removeConfigTx(Transaction& tx, SignalConfigId id);
-
-    // const queries for EditorContext cascade decisions; node-keyed queries
-    // resolve through the node's owning intersection
-    [[nodiscard]] std::optional<IntersectionId> intersectionAt(NodeId id) const;
-    [[nodiscard]] std::vector<SignalConfigId> configsOf(IntersectionId id) const;
-    [[nodiscard]] std::vector<SignalGroupId> groupsReferencing(
-        NodeId at, const std::vector<ClusterId>& clusters,
-        const std::vector<MovementId>& movements) const;
-    [[nodiscard]] std::vector<SignalGroupId> groupsReferencingCrosswalk(
-        NodeId at, CrosswalkId id) const;
-
-    // right-turn movements at the config's intersection without an arrow
-    // group in this config
-    [[nodiscard]] std::vector<MovementId> eligibleTurnArrowMovements(
-        SignalConfigId config) const;
+    void registerSolve(Transaction& tx);
+    void rederive();
+    void flush();
 
    private:
     Signal& signal_;
     const Graph& graph_;
     NetworkEventBus& bus_;
+    DirtyEventBus& dirty_;
+    const Regulations& regulations_;
+    SubscriptionBag subs_;
+    std::unordered_set<NodeId> reNodes_;
 
-    SignalGroupId addSignalGroupTx(Transaction& tx, Signal::GroupMutation mut);
+    void onNodeUpdated(UpdatedTx<NodeId>);
+    void onNodeRemoved(RemovedTx<NodeId>);
+    void onEntryRemoved(RemovedTx<EntryId, NodeId>);
+    void onMovementRemoved(RemovedTx<MovementId, NodeId>);
+    void onCrosswalkUpdated(UpdatedTx<CrosswalkId, NodeId>);
+    void onCrosswalkRemoved(RemovedTx<CrosswalkId, NodeId>);
+    void removeGroupsWithStream(Transaction& tx, StreamId stream, NodeId at);
+
+    void setSgKind(Transaction& tx, SignalGroupId id, SignalKind kind);
 };

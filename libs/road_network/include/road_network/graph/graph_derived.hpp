@@ -1,43 +1,67 @@
 #pragma once
 
-#include "derived/conflict_map.hpp"
-#include "derived/stream_intergreen_map.hpp"
-#include "derived/stream_permitted_map.hpp"
-#include "derived/turn_type.hpp"
-#include "road_network/util/ids.hpp"
-#include "road_network/util/slot_array.hpp"
+#include <common/slot_array.hpp>
 
-// Derived graph data container. Stores derived data. Only mutated via Graph /
-// GraphEditor otherwise const access
+#include "derived/conflict_point.hpp"
+#include "derived/intergreen_diagnostic.hpp"
+#include "road_network/util/ids.hpp"
+#include "road_network/util/stream_matrix.hpp"
+
 class GraphDerived {
    public:
-    [[nodiscard]] const SlotArray<NodeTag, ConflictMap>& conflict() const {
-        return conflict_;
+    [[nodiscard]] const SlotArray<NodeTag,
+                                  StreamMatrix<std::vector<ConflictPoint>>>&
+    conflicts() const {
+        return conflicts_;
     }
-    [[nodiscard]] const SlotArray<NodeTag, StreamIntergreenMap>&
-    streamIntergreen() const {
-        return streamIntergreen_;
+    [[nodiscard]] const SlotArray<NodeTag, StreamMatrix<int>>&
+    streamIntergreens() const {
+        return streamIntergreens_;
     }
-    [[nodiscard]] const SlotArray<NodeTag, StreamPermittedMap>&
+
+    [[nodiscard]] const SlotArray<NodeTag, StreamMatrix<IntergreenDiagnostic>>&
+    streamIntergreenDiagnostics() const {
+        return streamIntergreenDiagnostics_;
+    }
+
+    [[nodiscard]] const SlotArray<NodeTag, StreamMatrix<bool>>&
     streamPermitted() const {
         return streamPermitted_;
     }
-    [[nodiscard]] const SlotArray<MovementTag, TurnType>& turnTypes() const {
-        return turnTypes_;
+
+    // Per-stream approach deadlines: A[evac][appr] = seconds the approaching
+    // stream needs to reach the point it shares with evac (-1 when they never
+    // meet or appr is a crosswalk). Feeds signal-level approach caps.
+    [[nodiscard]] const SlotArray<NodeTag, StreamMatrix<int>>& streamApproach()
+        const {
+        return streamApproach_;
     }
 
-    SlotArray<NodeTag, ConflictMap>& conflict() { return conflict_; }
-    SlotArray<NodeTag, StreamIntergreenMap>& streamIntergreen() {
-        return streamIntergreen_;
+    SlotArray<NodeTag, StreamMatrix<std::vector<ConflictPoint>>>& conflicts() {
+        return conflicts_;
     }
-    SlotArray<NodeTag, StreamPermittedMap>& streamPermitted() {
+    SlotArray<NodeTag, StreamMatrix<int>>& streamIntergreens() {
+        return streamIntergreens_;
+    }
+
+    SlotArray<NodeTag, StreamMatrix<IntergreenDiagnostic>>&
+    streamIntergreenDiagnostics() {
+        return streamIntergreenDiagnostics_;
+    }
+
+    SlotArray<NodeTag, StreamMatrix<bool>>& streamPermitted() {
         return streamPermitted_;
     }
-    SlotArray<MovementTag, TurnType>& turnTypes() { return turnTypes_; }
+
+    SlotArray<NodeTag, StreamMatrix<int>>& streamApproach() {
+        return streamApproach_;
+    }
 
    private:
-    SlotArray<NodeTag, ConflictMap> conflict_;
-    SlotArray<NodeTag, StreamIntergreenMap> streamIntergreen_;
-    SlotArray<NodeTag, StreamPermittedMap> streamPermitted_;
-    SlotArray<MovementTag, TurnType> turnTypes_;
+    SlotArray<NodeTag, StreamMatrix<std::vector<ConflictPoint>>> conflicts_;
+    SlotArray<NodeTag, StreamMatrix<int>> streamIntergreens_;
+    SlotArray<NodeTag, StreamMatrix<IntergreenDiagnostic>>
+        streamIntergreenDiagnostics_;
+    SlotArray<NodeTag, StreamMatrix<bool>> streamPermitted_;
+    SlotArray<NodeTag, StreamMatrix<int>> streamApproach_;
 };

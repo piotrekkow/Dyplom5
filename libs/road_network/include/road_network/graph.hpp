@@ -1,153 +1,123 @@
 #pragma once
 
-#include <optional>
-#include <vector>
-
 #include "graph/graph_data.hpp"
 #include "graph/graph_derived.hpp"
-#include "road_network/graph/data/movement.hpp"
-#include "road_network/util/geometry/vector2.hpp"
-#include "util/ids.hpp"
-#include <functional>
+#include "util/mutation_base.hpp"
 
-struct EntryLaneSpec {
-    float width = 3.5f;
-    float stopLineOffset = 0.0f;
-    std::optional<float> storageLength = std::nullopt;
-};
+struct Regulations;
+class Graph : public MutationBase<NodeId> {
+    using Base = MutationBase<NodeId>;
+    // Base reaches into link()/unlink()/parentOf() via self()
+    friend Base;
 
-struct ExitLaneSpec {
-    float width = 3.5f;
-};
-
-class Graph {
    public:
-    const GraphData& data() const { return data_; }
-    const GraphDerived& derived() const { return derived_; }
+    explicit Graph(const Regulations& regulations)
+        : regulations_(regulations) {}
+    [[nodiscard]] const GraphData& data() const { return data_; }
+    [[nodiscard]] const GraphDerived& derived() const { return derived_; }
+    [[nodiscard]] const Regulations& regulations() const {
+        return regulations_;
+    }
 
-    struct NodeMutation {
-        NodeId id;
-        std::move_only_function<void()> undo;
+    struct Rederived {
+        std::unordered_set<NodeId> nodes;
     };
-
-    template <typename EntityId>
-    struct EntityMutation {
-        EntityId id;
-        NodeId at;
-        std::move_only_function<void()> undo;
-    };
+    Rederived solve() {
+        Rederived out;
+        for (NodeId id : dirty<NodeId>()) {
+            if (data_.nodes().alive(id)) {
+                recomputeDerived(id);
+                out.nodes.insert(id);
+            } else
+                evictDerived(id);
+        }
+        dirty<NodeId>().clear();
+        return out;
+    }
 
     // Node
-    NodeMutation createNode(Position center);
-    NodeMutation removeNode(NodeId at);
+    Mut<NodeId> createNode(Position center);
+    Mut<NodeId> removeNode(NodeId id);
 
     // Entry
-    EntityMutation<EntryId> createEntry(NodeId at, Position position,
-                                        Vector2 heading);
-    EntityMutation<EntryId> setEntrySpeedLimit(EntryId id, float speedLimit);
-    EntityMutation<EntryId> setEntryPosition(EntryId id, Position position);
-    EntityMutation<EntryId> setEntryHeading(EntryId id, Vector2 heading);
-    NodeMutation removeEntry(EntryId id);
+    EMut<EntryId, NodeId> createEntry(NodeId at, Position position,
+                                      Vector2 heading);
+    EMut<EntryId, NodeId> setParams(EntryId id, Entry::Params p);
+    EMut<EntryId, NodeId> removeEntry(EntryId id);
 
     // Exit
-    EntityMutation<ExitId> createExit(NodeId at, Position position,
-                                      Vector2 heading);
-    EntityMutation<ExitId> setExitSpeedLimit(ExitId id, float speedLimit);
-    EntityMutation<ExitId> setExitPosition(ExitId id, Position position);
-    EntityMutation<ExitId> setExitHeading(ExitId id, Vector2 heading);
-    NodeMutation removeExit(ExitId id);
-
-    // EntryLane / ExitLane — atomic approach-level mutation
-    EntityMutation<EntryId> setEntryLanes(EntryId at,
-                                          std::vector<EntryLaneSpec> specs);
-    EntityMutation<ExitId> setExitLanes(ExitId at,
-                                        std::vector<ExitLaneSpec> specs);
+    EMut<ExitId, NodeId> createExit(NodeId at, Position position,
+                                    Vector2 heading);
+    EMut<ExitId, NodeId> setParams(ExitId id, Exit::Params p);
+    EMut<ExitId, NodeId> removeExit(ExitId id);
 
     // CrosswalkSeries
-    EntityMutation<CrosswalkSeriesId> createCrosswalkSeries(NodeId at);
-    EntityMutation<CrosswalkSeriesId> setCrosswalkSeriesPedestrianPath(
-        CrosswalkSeriesId id, Polyline path);
-    EntityMutation<CrosswalkSeriesId> setCrosswalkSeriesWalkSpeed(
-        CrosswalkSeriesId id, float speed);
-    NodeMutation removeCrosswalkSeries(CrosswalkSeriesId id);
+    EMut<CrosswalkSeriesId, NodeId> createCrosswalkSeries(NodeId at);
+    EMut<CrosswalkSeriesId, NodeId> setParams(CrosswalkSeriesId id,
+                                              CrosswalkSeries::Params p);
+    EMut<CrosswalkSeriesId, NodeId> removeCrosswalkSeries(CrosswalkSeriesId id);
 
     // Crosswalk
-    EntityMutation<CrosswalkId> createCrosswalk(CrosswalkSeriesId at,
-                                                Line line);
-    EntityMutation<CrosswalkId> setCrosswalkLine(CrosswalkId id, Line line);
-    EntityMutation<CrosswalkId> setCrosswalkEdge(CrosswalkId id,
-                                                 Crosswalk::SegmentParams edge);
-    EntityMutation<CrosswalkId> setCrosswalkSplit(
-        CrosswalkId id, Crosswalk::SegmentParams split);
-    EntityMutation<CrosswalkId> setCrosswalkType(CrosswalkId id,
-                                                 CrosswalkType type);
-    NodeMutation removeCrosswalk(CrosswalkId id);
+    EMut<CrosswalkId, NodeId> createCrosswalk(CrosswalkSeriesId at,
+                                              Line anchor);
+    EMut<CrosswalkId, NodeId> setParams(CrosswalkId id, Crosswalk::Params p);
+    EMut<CrosswalkId, NodeId> removeCrosswalk(CrosswalkId id);
 
     // Movement
-    EntityMutation<MovementId> createMovement(EntryId from, ExitId to,
-                                              std::vector<EntryLaneId> lanes,
-                                              std::vector<int> split);
-    EntityMutation<MovementId> setMovementSplits(MovementId id,
-                                                 std::vector<int> splits);
-    EntityMutation<MovementId> setMovementType(MovementId id,
-                                               MovementType type);
-    EntityMutation<MovementId> setMovementPathSpec(MovementId id,
-                                                   MovementPathSpec spec);
-    NodeMutation removeMovement(MovementId id);
+    EMut<MovementId, NodeId> createMovement(EntryId from, ExitId to,
+                                            EntrySection lanes);
+    EMut<MovementId, NodeId> setParams(MovementId id, Movement::Params p);
+    EMut<MovementId, NodeId> removeMovement(MovementId id);
 
     // Cluster
-    EntityMutation<ClusterId> createCluster(EntryId at,
-                                            std::vector<MovementId> movements,
-                                            std::vector<EntryLaneId> lanes);
-    NodeMutation removeCluster(ClusterId id);
+    EMut<ClusterId, NodeId> createCluster(EntryId at,
+                                          std::vector<MovementId> movements,
+                                          EntrySection lanes);
+    EMut<ClusterId, NodeId> removeCluster(ClusterId id);
 
-    // StreamPermittedOverride
-    NodeMutation setStreamPermittedOverride(NodeId node, StreamId evac,
-                                            StreamId appr, bool permitted);
-    NodeMutation eraseStreamPermittedOverride(NodeId node, StreamId evac,
-                                              StreamId appr);
+    // Overrides
+    Mut<NodeId> setPermittedOverride(NodeId id, StreamId a, StreamId b,
+                                     bool permitted);
+    Mut<NodeId> clearPermittedOverride(NodeId id, StreamId a, StreamId b);
 
-    // StreamIntergreenOverride
-    NodeMutation setStreamIntergreenOverride(NodeId node, StreamId evac,
-                                             StreamId appr, int t_maxEvAp,
-                                             int t_maxApEv);
-    NodeMutation eraseStreamIntergreenOverride(NodeId node, StreamId evac,
-                                               StreamId appr);
+    Mut<NodeId> setIntergreenOverride(NodeId id, StreamId evac, StreamId appr,
+                                      int tMaxEvAp, int tMaxApEv);
+    Mut<NodeId> clearIntergreenOverride(NodeId id, StreamId evac,
+                                        StreamId appr);
 
-    void solve() {
-        for (NodeId id : dirty_) recomputeDerived(id);
-        dirty_.clear();
-    }
+    // parentOf() - which bucket owns this entity (return type selects the
+    // dirty set in the base)
+    [[nodiscard]] NodeId parentOf(NodeId) const;
+    [[nodiscard]] NodeId parentOf(EntryId) const;
+    [[nodiscard]] NodeId parentOf(MovementId) const;
+    [[nodiscard]] NodeId parentOf(ExitId) const;
+    [[nodiscard]] NodeId parentOf(CrosswalkId) const;
+    [[nodiscard]] NodeId parentOf(CrosswalkSeriesId) const;
+    [[nodiscard]] NodeId parentOf(ClusterId) const;
 
    private:
     GraphData data_;
     GraphDerived derived_;
+    const Regulations& regulations_;
 
-    std::unordered_set<NodeId> dirty_;
     void recomputeDerived(NodeId id);
+    void evictDerived(NodeId id);
 
-    SlotMap<NodeTag, Node>::VacatedSlot removeNodeImpl(NodeId id);
-    void createNodeImpl(SlotMap<NodeTag, Node>::VacatedSlot vs);
-    SlotMap<EntryTag, Entry>::VacatedSlot removeEntryImpl(EntryId id);
-    void createEntryImpl(SlotMap<EntryTag, Entry>::VacatedSlot vs);
-    SlotMap<ExitTag, Exit>::VacatedSlot removeExitImpl(ExitId id);
-    void createExitImpl(SlotMap<ExitTag, Exit>::VacatedSlot vs);
-    SlotMap<MovementTag, Movement>::VacatedSlot removeMovementImpl(
-        MovementId id);
-    void createMovementImpl(SlotMap<MovementTag, Movement>::VacatedSlot vs);
-    SlotMap<EntryLaneTag, EntryLane>::VacatedSlot removeEntryLaneImpl(
-        EntryLaneId id);
-    void createEntryLaneImpl(SlotMap<EntryLaneTag, EntryLane>::VacatedSlot vs);
-    SlotMap<ExitLaneTag, ExitLane>::VacatedSlot removeExitLaneImpl(
-        ExitLaneId id);
-    void createExitLaneImpl(SlotMap<ExitLaneTag, ExitLane>::VacatedSlot vs);
-    SlotMap<CrosswalkTag, Crosswalk>::VacatedSlot removeCrosswalkImpl(
-        CrosswalkId id);
-    void createCrosswalkImpl(SlotMap<CrosswalkTag, Crosswalk>::VacatedSlot vs);
-    SlotMap<CrosswalkSeriesTag, CrosswalkSeries>::VacatedSlot
-    removeCrosswalkSeriesImpl(CrosswalkSeriesId id);
-    void createCrosswalkSeriesImpl(
-        SlotMap<CrosswalkSeriesTag, CrosswalkSeries>::VacatedSlot vs);
-    SlotMap<ClusterTag, Cluster>::VacatedSlot removeClusterImpl(ClusterId id);
-    void createClusterImpl(SlotMap<ClusterTag, Cluster>::VacatedSlot vs);
+    // link() - push into parent's child vector
+    void link(NodeId);
+    void link(EntryId);
+    void link(MovementId);
+    void link(ExitId);
+    void link(CrosswalkId);
+    void link(CrosswalkSeriesId);
+    void link(ClusterId);
+
+    // unlink() - erase from parent's child vector, erase derived mentions
+    void unlink(NodeId);
+    void unlink(EntryId);
+    void unlink(MovementId);
+    void unlink(ExitId);
+    void unlink(CrosswalkId);
+    void unlink(CrosswalkSeriesId);
+    void unlink(ClusterId);
 };

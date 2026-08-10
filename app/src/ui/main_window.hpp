@@ -1,16 +1,17 @@
 #pragma once
 #include <QMainWindow>
 
-class NetworkScene;
-class NetworkView;
+#include "core/ui_core.hpp"
+
+class Project;
+class RoadNetworkPanel;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
    public:
-    explicit MainWindow(QWidget* parent = nullptr);
-    NetworkScene* scene() { return scene_; }
+    explicit MainWindow(Project& project, QWidget* parent = nullptr);
 
    private:
-    NetworkScene* scene_;
-    NetworkView* view_;
+    UiCore core_;
+    RoadNetworkPanel* roadNetworkPanel_;
 };

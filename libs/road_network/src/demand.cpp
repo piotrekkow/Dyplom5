@@ -1,77 +1,61 @@
 #include "road_network/demand.hpp"
 
-#include <optional>
-
 #include "derived/demand_compute.hpp"
-#include "road_network/graph/derived/graph_geometry.hpp"
 #include "road_network/graph/graph_data.hpp"
-#include "road_network/util/ids.hpp"
-#include "road_network/util/slot_array.hpp"
 
-template <typename Tag, typename T>
-static std::optional<T> optCopy(const SlotArray<Tag, T>& arr, Id<Tag> id) {
-    const T* p = arr.get(id);
-    return p ? std::optional<T>(*p) : std::nullopt;
+Mut<MovementId> Demand::setFlow(MovementId mov, NodeId at, Flow value) {
+    auto& arr = data_.flows();
+    return setSlotAt(arr, mov, at, value);
 }
 
-template <typename Tag, typename T>
-static void restore(SlotArray<Tag, T>& arr, Id<Tag> id,
-                    const std::optional<T>& old) {
-    if (old)
-        arr.set(id, *old);
-    else
-        arr.erase(id);
+// Only called when the movement removed
+Mut<MovementId> Demand::clearFlow(MovementId mov, NodeId at) {
+    derived_.flowRatios().erase(mov);
+    derived_.baseSaturations().erase(mov);
+    auto& arr = data_.flows();
+    return clearSlotAt(arr, mov, at);
 }
 
-Demand::Mutation Demand::setFlow(MovementId id, Flow flow) {
-    auto old = optCopy(data_.flows(), id);
-    data_.flows().set(id, flow);
-    dirty_.insert(id);
-    return {.id = id,
-            .undo = [this, id, old] { restore(data_.flows(), id, old); }};
+Mut<MovementId> Demand::setSaturationOverride(MovementId mov, NodeId at,
+                                              SaturationOverride value) {
+    auto& arr = data_.saturationOverrides();
+    return setSlotAt(arr, mov, at, value);
+}
+Mut<MovementId> Demand::clearSaturationOverride(MovementId mov, NodeId at) {
+    auto& arr = data_.saturationOverrides();
+    return clearSlotAt(arr, mov, at);
 }
 
-Demand::Mutation Demand::eraseFlow(MovementId id) {
-    auto old = optCopy(data_.flows(), id);
-    data_.flows().erase(id);
-    return {.id = id,
-            .undo = [this, id, old] { restore(data_.flows(), id, old); }};
-}
-
-Demand::Mutation Demand::setSaturationOverride(MovementId id,
-                                               SaturationOverride override) {
-    auto old = optCopy(data_.saturationOverrides(), id);
-    data_.saturationOverrides().set(id, override);
-    dirty_.insert(id);
-    return {.id = id, .undo = [this, id, old] {
-                restore(data_.saturationOverrides(), id, old);
-            }};
-}
-Demand::Mutation Demand::eraseSaturationOverride(MovementId id) {
-    auto old = optCopy(data_.saturationOverrides(), id);
-    data_.saturationOverrides().erase(id);
-    return {.id = id, .undo = [this, id, old] {
-                restore(data_.saturationOverrides(), id, old);
-            }};
-}
-
-void Demand::solve(const GraphData& graph) {
-    std::unordered_set<EntryId> dirtyEntries;
-    for (MovementId mId : dirty_) {
-        const auto* m = graph.movements().get(mId);
-        if (!m) continue;
-        EntryId eId = m->from();
-        dirtyEntries.insert(eId);
-        if (auto opp = graph_geometry::findOpposingEntry(graph, eId))
-            dirtyEntries.insert(*opp);
+Demand::Rederived Demand::solve(const GraphData& graph) {
+    Rederived out;
+    for (auto id : dirty<EntryId>()) {
+        evictDerived(id);
     }
-    for (EntryId id : dirtyEntries) recomputeDerived(graph, id);
-    dirty_.clear();
+    for (auto nid : dirty<NodeId>()) {
+        const auto* node = graph.nodes().get(nid);
+        if (!node) continue;
+        for (auto id : node->entries()) {
+            recomputeDerived(id, graph);
+            out.entries.insert(id);
+        }
+    }
+    dirty<NodeId>().clear();
+    dirty<EntryId>().clear();
+    return out;
 }
 
-void Demand::recomputeDerived(const GraphData& graph, EntryId id) {
-    auto eMap = demand_compute::entryLaneSaturation(graph, data_, id);
-    for (auto& [lane, sat] : eMap) {
-        derived_.laneSaturations().set(lane, sat);
+void Demand::recomputeDerived(EntryId id, const GraphData& graph) {
+    std::vector<Saturation> laneSats =
+        demand_compute::entryLaneSaturations(graph, data_, regulations_, id);
+    derived_.laneSaturations().set(id, std::move(laneSats));
+    const auto& movs = graph.entries().get(id)->movements();
+    for (auto mid : movs) {
+        derived_.baseSaturations().set(
+            mid,
+            demand_compute::baseSaturation(graph, data_, regulations_, mid));
+        derived_.flowRatios().set(mid,
+                                  demand_compute::flowRatio(graph, *this, mid));
     }
 }
+
+void Demand::evictDerived(EntryId id) { derived_.laneSaturations().erase(id); }

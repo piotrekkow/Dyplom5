@@ -1,6 +1,8 @@
 #include <QApplication>
+#include <QTimer>
+#include <QWidget>
 
-#include "root/application.hpp"
+#include "application.hpp"
 
 int main(int argc, char* argv[]) {
     QApplication qt(argc, argv);

@@ -2,21 +2,21 @@
 
 class Flow {
    public:
-    Flow(float vehiclesPerHour, float uc = 0.f) {
+    Flow(double vehiclesPerHour, double uc = 0.f) {
         setVehiclesPerHour(vehiclesPerHour);
         setUc(uc);
     }
 
-    [[nodiscard]] float vehiclesPerHour() const { return vehiclesPerHour_; }
-    [[nodiscard]] float eqVehiclesPerHour() const {
+    [[nodiscard]] double vehiclesPerHour() const { return vehiclesPerHour_; }
+    [[nodiscard]] double eqVehiclesPerHour() const {
         return vehiclesPerHour_ * (1 + uc_);
     }
-    [[nodiscard]] float uc() const { return uc_; }
+    [[nodiscard]] double uc() const { return uc_; }
 
-    void setVehiclesPerHour(float value);
-    void setUc(float value);
+    void setVehiclesPerHour(double value) { vehiclesPerHour_ = value; }
+    void setUc(double value) { uc_ = value; }
 
    private:
-    float vehiclesPerHour_ = 0.f;
-    float uc_ = 0.f;
+    double vehiclesPerHour_ = 0.f;
+    double uc_ = 0.f;
 };

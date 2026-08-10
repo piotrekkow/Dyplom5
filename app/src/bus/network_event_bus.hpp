@@ -1,73 +1,57 @@
 #pragma once
-#include "event_bus.hpp"
-#include "network_events.hpp"
+
+#include "impl/event_bus.hpp"
+#include "impl/network_events.hpp"
+#include "impl/network_tags.hpp"
 
 struct NetworkEventBus {
-    EventBus<NodeCreated> nodeCreated;
-    EventBus<NodeRemoved> nodeRemoved;
+    EventBus<Created<NodeId>> nodeCreated;
+    EventBus<Updated<NodeId>> nodeUpdated;
+    EventBus<Updated<NodeId>> nodeUpdatedSignal;   // (rederived)
+    EventBus<Updated<NodeId>> nodeUpdatedControl;  // (rederived)
+    EventBus<Removed<NodeId>> nodeRemoved;
+    EventBus<Created<EntryId, NodeId>> entryCreated;
+    EventBus<Updated<EntryId, NodeId>> entryUpdated;
+    EventBus<Removed<EntryId, NodeId>> entryRemoved;
+    EventBus<Created<ExitId, NodeId>> exitCreated;
+    EventBus<Updated<ExitId, NodeId>> exitUpdated;
+    EventBus<Removed<ExitId, NodeId>> exitRemoved;
+    EventBus<Created<CrosswalkSeriesId, NodeId>> crosswalkSeriesCreated;
+    EventBus<Updated<CrosswalkSeriesId, NodeId>> crosswalkSeriesUpdated;
+    EventBus<Removed<CrosswalkSeriesId, NodeId>> crosswalkSeriesRemoved;
+    EventBus<Created<CrosswalkId, NodeId>> crosswalkCreated;
+    EventBus<Updated<CrosswalkId, NodeId>> crosswalkUpdated;
+    EventBus<Removed<CrosswalkId, NodeId>> crosswalkRemoved;
+    EventBus<Created<MovementId, NodeId>> movementCreated;
+    EventBus<Updated<MovementId, NodeId>> movementUpdated;
+    EventBus<Removed<MovementId, NodeId>> movementRemoved;
+    EventBus<Created<ClusterId, NodeId>> clusterCreated;
+    EventBus<Removed<ClusterId, NodeId>> clusterRemoved;
 
-    EventBus<NodeRederived> nodeRederived;
+    EventBus<Created<SignalGroupId, NodeId>> signalGroupCreated;
+    EventBus<Updated<SignalGroupId, NodeId>> signalGroupUpdated;
+    EventBus<Removed<SignalGroupId, NodeId>> signalGroupRemoved;
+    EventBus<Created<TimingId, NodeId>> timingCreated;
+    EventBus<Updated<TimingId, NodeId>> timingUpdated;
+    EventBus<Removed<TimingId, NodeId>> timingRemoved;
+    EventBus<Created<StageId, NodeId>> stageCreated;
+    EventBus<Updated<StageId, NodeId>> stageUpdated;
+    EventBus<Removed<StageId, NodeId>> stageRemoved;
+    EventBus<Created<StageTransitionId, NodeId>> stageTransitionCreated;
+    EventBus<Updated<StageTransitionId, NodeId>> stageTransitionUpdated;
+    EventBus<Removed<StageTransitionId, NodeId>> stageTransitionRemoved;
 
-    EventBus<EntryCreated> entryCreated;
-    EventBus<EntryMoved> entryMoved;
-    EventBus<EntrySpeedLimitChanged> entrySpeedLimitChanged;
-    EventBus<EntryRemoved> entryRemoved;
-
-    EventBus<ExitCreated> exitCreated;
-    EventBus<ExitMoved> exitMoved;
-    EventBus<ExitSpeedLimitChanged> exitSpeedLimitChanged;
-    EventBus<ExitRemoved> exitRemoved;
-
-    EventBus<CrosswalkSeriesCreated> crosswalkSeriesCreated;
-    EventBus<CrosswalkSeriesUpdated> crosswalkSeriesUpdated;
-    EventBus<CrosswalkSeriesWalkSpeedChanged> crosswalkSeriesWalkSpeedChanged;
-    EventBus<CrosswalkSeriesRemoved> crosswalkSeriesRemoved;
-    EventBus<CrosswalkCreated> crosswalkCreated;
-    EventBus<CrosswalkUpdated> crosswalkUpdated;
-    EventBus<CrosswalkRemoved> crosswalkRemoved;
-
-    EventBus<MovementCreated> movementCreated;
-    EventBus<MovementUpdated> movementUpdated;
-    EventBus<MovementRemoved> movementRemoved;
-
-    EventBus<EntryLanesChanged> entryLanesChanged;
-    EventBus<ExitLanesChanged> exitLanesChanged;
-
-    EventBus<ClusterCreated> clusterCreated;
-    EventBus<ClusterRemoved> clusterRemoved;
-
-    EventBus<FlowChanged> flowChanged;
-    EventBus<FlowErased> flowErased;
-
-    EventBus<SaturationOverrideChanged> saturationOverrideChanged;
-    EventBus<SaturationOverrideErased> saturationOverrideErased;
-
-    EventBus<DemandRederived> demandRederived;
-
-    EventBus<StreamPermittedOverrideChanged> streamPermittedOverrideChanged;
-    EventBus<StreamPermittedOverrideErased> streamPermittedOverrideErased;
-
-    EventBus<StreamIntergreenOverrideChanged> streamIntergreenOverrideChanged;
-    EventBus<StreamIntergreenOverrideErased> streamIntergreenOverrideErased;
-
-    EventBus<IntersectionCreated> intersectionCreated;
-    EventBus<IntersectionRemoved> intersectionRemoved;
-    EventBus<IntersectionNodesChanged> intersectionNodesChanged;
-
-    EventBus<SignalConfigCreated> signalConfigCreated;
-    EventBus<SignalConfigRemoved> signalConfigRemoved;
-    EventBus<SignalConfigRenamed> signalConfigRenamed;
-
-    EventBus<SignalGroupCreated> signalGroupCreated;
-    EventBus<SignalGroupRemoved> signalGroupRemoved;
-    EventBus<SignalGroupChanged> signalGroupChanged;
-
-    // control domain
-    EventBus<TimingCreated> timingCreated;
-    EventBus<TimingRemoved> timingRemoved;
-
-    EventBus<SequenceChanged> sequenceChanged;
-
-    EventBus<TimingValidityChanged> timingValidityChanged;
-    EventBus<ConfigCompletenessChanged> configCompletenessChanged;
+    EventBus<Set<FlowTag, MovementId>> flowSet;
+    EventBus<Cleared<FlowTag, MovementId>> flowCleared;
+    EventBus<Set<SaturationOverrideTag, MovementId>> saturationOverrideSet;
+    EventBus<Cleared<SaturationOverrideTag, MovementId>>
+        saturationOverrideCleared;
+    EventBus<Set<StreamPermittedOverrideTag, NodeId>>
+        streamPermittedOverrideSet;
+    EventBus<Cleared<StreamPermittedOverrideTag, NodeId>>
+        streamPermittedOverrideCleared;
+    EventBus<Set<StreamIntergreenOverrideTag, NodeId>>
+        streamIntergreenOverrideSet;
+    EventBus<Cleared<StreamIntergreenOverrideTag, NodeId>>
+        streamIntergreenOverrideCleared;
 };

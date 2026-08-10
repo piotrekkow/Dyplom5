@@ -1,2 +1,0 @@
-add_library(fsm_simulator_lib INTERFACE)
-target_include_directories(fsm_simulator_lib INTERFACE include)

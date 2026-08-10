@@ -1,14 +1,14 @@
-add_library(signal_optimizer_lib
+add_library(signal_optimizer
     src/optimizer.cpp
     src/config_generator.cpp
-    src/phase_generator.cpp
-    src/phase_cover.cpp
-    src/phase_sequence.cpp
+    src/stage_generator.cpp
+    src/stage_cover.cpp
+    src/stage_sequence.cpp
     src/green_time.cpp
     src/delay.cpp
 )
-target_include_directories(signal_optimizer_lib
+target_include_directories(signal_optimizer
     PUBLIC include
     PRIVATE src
 )
-target_link_libraries(signal_optimizer_lib PUBLIC road_network_lib)
+target_link_libraries(signal_optimizer PUBLIC road_network)

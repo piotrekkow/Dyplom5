@@ -1,34 +1,36 @@
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <cmath>
 #include <future>
 #include <mutex>
 #include <print>
+#include <regulations/regulations.hpp>
+#include <regulations/types/stream_kind.hpp>
 #include <road_network/demand.hpp>
 #include <road_network/graph.hpp>
+#include <road_network/util/compute_helpers.hpp>
 #include <signal_optimizer/optimizer.hpp>
-#include <unordered_map>
 #include <variant>
 
 #include "config_generator.hpp"
 #include "delay.hpp"
 #include "green_time.hpp"
-#include "phase_cover.hpp"
-#include "phase_generator.hpp"
-#include "phase_sequence.hpp"
-#include "road_network/control/data/sequence.hpp"
+#include "stage_cover.hpp"
+#include "stage_generator.hpp"
+#include "stage_sequence.hpp"
 #include "types.hpp"
 
 namespace {
-// Build the optimizer's input from domain objects for a specific node
 GInput buildInput(NodeId nodeId, const Graph& graph, const Demand& demand,
                   int T) {
     const auto& gdata = graph.data();
     const auto& gderived = graph.derived();
+    const auto& regulations = graph.regulations();
 
     GInput inp{.entries = {}, .series = {}, .M = {}, .P = {}, .T = T};
 
-    if (const auto* m = gderived.streamIntergreen().get(nodeId)) inp.M = *m;
+    if (const auto* m = gderived.streamIntergreens().get(nodeId)) inp.M = *m;
     if (const auto* p = gderived.streamPermitted().get(nodeId)) inp.P = *p;
     const auto* node = gdata.nodes().get(nodeId);
     if (!node) return inp;
@@ -37,8 +39,10 @@ GInput buildInput(NodeId nodeId, const Graph& graph, const Demand& demand,
         const auto* entry = gdata.entries().get(eid);
         if (!entry || entry->clusters().empty()) continue;
 
+        const auto* laneSat = demand.derived().laneSaturations().get(eid);
+
         GInput::EntryData edata{
-            .id = eid, .heading = entry->heading(), .clusters = {}};
+            .id = eid, .heading = entry->params().heading, .clusters = {}};
 
         for (ClusterId cid : entry->clusters()) {
             const auto* cluster = gdata.clusters().get(cid);
@@ -46,23 +50,19 @@ GInput buildInput(NodeId nodeId, const Graph& graph, const Demand& demand,
             GInput::ClusterData cdata{
                 .id = cid,
                 .movements = {},
-                .lanes = {},
                 .saturation = {},
-                .Q = 0,
+                .Q = 0.0,
             };
 
-            std::unordered_map<EntryLaneId, GInput::EntryLaneData> laneMap;
-            for (EntryLaneId lid : cluster->lanes()) {
-                const auto* sat = demand.derived().laneSaturations().get(lid);
-                assert(sat);
-                GInput::EntryLaneData ldata{
-                    .id = lid,
-                    .saturation = *sat,
-                };
-
-                laneMap.emplace(lid, ldata);
-                cdata.saturation += ldata.saturation;
-                cdata.lanes.push_back(ldata);
+            if (laneSat) {
+                const auto& lanes = cluster->lanes();
+                for (int li = lanes.firstIdx; li <= lanes.lastIdx(); ++li) {
+                    if (li < 0 ||
+                        static_cast<std::size_t>(li) >= laneSat->size())
+                        continue;
+                    cdata.saturation +=
+                        (*laneSat)[static_cast<std::size_t>(li)];
+                }
             }
 
             for (MovementId mid : cluster->movements()) {
@@ -71,17 +71,12 @@ GInput buildInput(NodeId nodeId, const Graph& graph, const Demand& demand,
 
                 GInput::MovementData mdata{
                     .id = mid,
-                    .lanes = {},
-                    .turn = *gderived.turnTypes().get(mid)};
+                    .turn = compute::turnKind(gdata, regulations, mid)};
 
-                for (auto lid : movement->lanes()) {
-                    auto it = laneMap.find(lid);
-                    if (it != laneMap.end()) mdata.lanes.push_back(it->second);
-                }
                 const auto* Q = demand.data().flows().get(mid);
                 assert(Q);
                 cdata.Q += Q->eqVehiclesPerHour();
-                cdata.movements.push_back(std::move(mdata));
+                cdata.movements.push_back(mdata);
             }
             edata.clusters.push_back(std::move(cdata));
         }
@@ -92,9 +87,12 @@ GInput buildInput(NodeId nodeId, const Graph& graph, const Demand& demand,
         const auto* cs = gdata.crosswalkSeries().get(csid);
         if (!cs || cs->crosswalks().empty()) continue;
 
-        int minGreen =
-            std::max(4, static_cast<int>(std::ceil(cs->length() /
-                                                   cs->pedestrianWalkSpeed())));
+        double speed = cs->params().criticalGreenSpeedOverride.value_or(
+            regulations.kinematics(toStreamKind(cs->params().type))
+                .evacSpeedCeil);
+        int minGreen = std::max(
+            4, static_cast<int>(
+                   std::ceil(cs->params().criticalGreenPath.length() / speed)));
         GInput::SeriesData sdata{
             .id = csid, .crosswalks = cs->crosswalks(), .minGreen = minGreen};
         inp.series.push_back(std::move(sdata));
@@ -102,28 +100,47 @@ GInput buildInput(NodeId nodeId, const Graph& graph, const Demand& demand,
     return inp;
 }
 
-GCycle optimizeConfig(const std::vector<GPhase>& validPhases,
-                      const std::vector<std::vector<GPhase>>& covers,
-                      const GConfig& cfg, int T) {
+// Counts where candidates die along the pipeline, to explain a nullopt result.
+struct GPipelineStats {
+    std::atomic<int> noCliques{0};
+    std::atomic<int> noCovers{0};
+    std::atomic<long> candidates{0};
+    std::atomic<long> allocFail{0};
+    std::atomic<long> infDelay{0};
+};
+
+GCycle optimizeConfig(const std::vector<std::vector<GStage>>& covers,
+                      const GConfig& cfg, int T, const Regulations& regulations,
+                      GPipelineStats& stats,
+                      const std::function<bool()>& cancelled) {
     GCycle best;
 
     for (const auto& cover : covers) {
-        auto sequences = enumerateSequences(cover, cfg);
-        for (auto& [order, transitions] : sequences) {
-            std::vector<GPhase> phases;
-            phases.reserve(order.size());
-            for (int i : order) phases.push_back(cover[i]);
-
-            auto alloc = greedyMarginalAlloc(phases, transitions, cfg, T);
-            if (!alloc) continue;
+        if (cancelled && cancelled()) return best;
+        auto candidates = enumerateSequences(cover, cfg, regulations);
+        stats.candidates += static_cast<long>(candidates.size());
+        for (auto& candidate : candidates) {
+            if (cancelled && cancelled()) return best;
+            auto alloc = greedyMarginalAlloc(candidate.stages,
+                                             candidate.transitions, cfg, T);
+            if (!alloc) {
+                stats.allocFail++;
+                continue;
+            }
 
             double D = totalDelay(*alloc, cfg, T);
-            GCycle candidate{.phases = phases,
-                             .transitions = std::move(transitions),
-                             .alloc = std::move(*alloc),
-                             .D = D};
+            if (!std::isfinite(D)) stats.infDelay++;
+            if (D >= best.D) continue;
 
-            if (candidate.D < best.D) best = std::move(candidate);
+            control::StageSequence<GId> steps;
+            steps.reserve(candidate.stages.size());
+            for (std::size_t i = 0; i < candidate.stages.size(); ++i)
+                steps.push_back(
+                    {.stage = std::move(candidate.stages[i]),
+                     .transition = std::move(candidate.transitions[i]),
+                     .stageDuration = alloc->tStage[i]});
+
+            best = GCycle{.steps = std::move(steps), .D = D};
         }
     }
     return best;
@@ -134,20 +151,26 @@ struct OptimizerRawResult {
     GCycle cycle;
 };
 
-std::optional<OptimizerRawResult> pickBest(const std::vector<GConfig>& configs,
-                                           int T, bool progressBar = true) {
+std::expected<OptimizerRawResult, signal_optimizer::OptimizeError> pickBest(
+    const std::vector<GConfig>& configs, int T, const Regulations& regulations,
+    signal_optimizer::OptimizationStats& out,
+    const std::function<bool()>& cancelled,
+    const std::function<void(int, int)>& progress, bool progressBar = true) {
     OptimizerRawResult globalBest;
+    GPipelineStats stats;
     std::mutex mu;
     std::atomic<int> done{0};
     const int total = static_cast<int>(configs.size());
+    if (progress) progress(0, total);
 
     if (progressBar) {
         std::print(stderr, "Optimizer: 0/{} (0%)", total);
         std::fflush(stderr);
     }
     auto reportProgress = [&]() {
-        if (!progressBar) return;
         int n = ++done;
+        if (progress) progress(n, total);
+        if (!progressBar) return;
         std::print(stderr, "\rOptimizer: {}/{} ({}%)", n, total,
                    n * 100 / total);
         std::fflush(stderr);
@@ -158,21 +181,28 @@ std::optional<OptimizerRawResult> pickBest(const std::vector<GConfig>& configs,
 
     for (int ci = 0; ci < total; ci++) {
         futures.push_back(std::async(std::launch::async, [&, ci]() {
-            const auto& cfg = configs[ci];
+            if (cancelled && cancelled()) {
+                reportProgress();
+                return;
+            }
+            const auto& cfg = configs[static_cast<std::size_t>(ci)];
 
-            auto validPhases = findAllCliques(cfg);
-            if (validPhases.empty()) {
+            auto validStages = findMaximalCliques(cfg);
+            if (validStages.empty()) {
+                stats.noCliques++;
                 reportProgress();
                 return;
             }
 
-            auto covers = generateCovers(validPhases, cfg);
+            auto covers = generateCovers(validStages, cfg);
             if (covers.empty()) {
+                stats.noCovers++;
                 reportProgress();
                 return;
             }
 
-            GCycle result = optimizeConfig(validPhases, covers, cfg, T);
+            GCycle result =
+                optimizeConfig(covers, cfg, T, regulations, stats, cancelled);
 
             std::lock_guard<std::mutex> lock(mu);
             if (result.D < globalBest.cycle.D) {
@@ -184,209 +214,126 @@ std::optional<OptimizerRawResult> pickBest(const std::vector<GConfig>& configs,
     }
 
     for (auto& f : futures) f.get();
+    out = {.configs = total,
+           .sequences = stats.candidates.load(),
+           .fullyInfeasible = stats.allocFail.load()};
     if (progressBar) {
         std::println(stderr, "");
         std::fflush(stderr);
     }
-    if (globalBest.cfgIdx < 0) return std::nullopt;
+    std::println(stderr,
+                 "Optimizer pipeline: {} configs ({} no stages, {} no covers), "
+                 "{} sequences ({} alloc infeasible, {} infinite delay)",
+                 total, stats.noCliques.load(), stats.noCovers.load(),
+                 stats.candidates.load(), stats.allocFail.load(),
+                 stats.infDelay.load());
+    if (cancelled && cancelled())
+        return std::unexpected(signal_optimizer::OptimizeError::Cancelled);
+    if (globalBest.cfgIdx < 0) {
+        std::println(stderr, "Optimizer: no feasible plan found");
+        return std::unexpected(signal_optimizer::OptimizeError::NoFeasiblePlan);
+    }
     return globalBest;
 }
 
-// Widen every crosswalk green window as far as the per-pair intergreen allows,
-// scanning the whole cycle. Windows are absolute: start in [0,T), end may
-// exceed T (wrap). Vehicle windows are read-only. Every extension is measured
-// against the pre-pass snapshot, so the result is independent of processing
-// order even when two crosswalks conflict with each other.
-void extendCrosswalkWindows(std::vector<int>& start, std::vector<int>& len,
-                            const std::vector<bool>& present,
-                            const GConfig& cfg, int T) {
-    const auto s0 = start;
-    const auto l0 = len;
-
-    // Required clearance between ev losing green and ap gaining green.
-    // -1 == compatible (no constraint). Crosswalk evac reserves +4 flashing
-    // green, mirroring computeTransitionV2's `ig + 4`.
-    auto clearance = [&](GId ev, GId ap) {
-        int ig = cfg.intergreen[ev][ap];
-        if (ig < 0) return -1;
-        return cfg.groups[ev].kind == GKind::Crosswalk ? ig + 4 : ig;
-    };
-
-    // Forward distance a -> b around a cycle of length T, in [0, T).
-    auto cycleAhead = [&](int a, int b) {
-        int d = (b - a) % T;
-        return d < 0 ? d + T : d;
-    };
-
-    for (GId cw = 0; cw < (GId)cfg.groups.size(); ++cw) {
-        if (cfg.groups[cw].kind != GKind::Crosswalk || !present[cw]) continue;
-
-        int fwd = T;  // how far cw's end may move forward (cw evac -> X appr)
-        int bwd =
-            T;  // how far cw's start may move backward (X evac -> cw appr)
-        for (GId x = 0; x < (GId)cfg.groups.size(); ++x) {
-            if (x == cw || !present[x]) continue;
-            const int xEnd = s0[x] + l0[x];
-
-            if (int clr = clearance(cw, x); clr >= 0)
-                fwd = std::min(fwd, cycleAhead(s0[cw] + l0[cw], s0[x]) - clr);
-            if (int clr = clearance(x, cw); clr >= 0)
-                bwd = std::min(bwd, cycleAhead(xEnd, s0[cw]) - clr);
-        }
-
-        // Don't let the two ends meet/cross; never shrink below the original.
-        const int room = T - l0[cw];
-        fwd = std::clamp(fwd, 0, room);
-        bwd = std::clamp(bwd, 0, room - fwd);
-
-        start[cw] = ((s0[cw] - bwd) % T + T) % T;
-        len[cw] = l0[cw] + bwd + fwd;
-    }
-}
-
-std::unordered_map<GId, Sequence> computeSequences(const GConfig& bestCfg,
-                                                   const GCycle& best,
-                                                   int cycleLength) {
-    struct IntervalBlueprint {
-        int onset;
-        int duration;
-    };
-
-    const auto nGroups = bestCfg.groups.size();
-
-    std::vector<std::vector<IntervalBlueprint>> seqBps(
-        nGroups);  // indexed by group
-    std::vector<int> pendingWrap(nGroups, 0);
-    auto k = best.phases.size();
-    int phaseOnset = 0;
-    for (int i = 0; i < k; ++i) {
-        const auto& phase = best.phases[i];
-        const auto& next = best.transitions[i];
-        const auto& prev =
-            i == 0 ? best.transitions[k - 1] : best.transitions[i - 1];
-        auto alloc = best.alloc.tPhase[i];
-
-        for (auto gid : phase.groupIds) {
-            if (!prev.groups.at(gid).prevActive) {
-                int onset = phaseOnset - prev.groups.at(gid).green;
-                int duration = prev.groups.at(gid).green + alloc +
-                               next.groups.at(gid).green;
-                seqBps[gid].emplace_back(onset, duration);
-            } else if (!seqBps[gid].empty()) {
-                seqBps[gid].back().duration +=
-                    alloc + next.groups.at(gid).green;
-            } else {
-                pendingWrap[gid] += alloc + next.groups.at(gid).green;
-            }
-        }
-
-        phaseOnset += alloc + next.makespan;
-    }
-
-    for (GId gid = 0; gid < nGroups; ++gid) {
-        if (pendingWrap[gid] <= 0) continue;
-        if (!seqBps[gid].empty()) {
-            seqBps[gid].back().duration += pendingWrap[gid];
-        } else {
-            // always active
-            seqBps[gid].emplace_back(0, cycleLength);
-        }
-    }
-
-    std::vector<int> wStart(nGroups, 0);
-    std::vector<int> wLen(nGroups, 0);
-    std::vector<bool> present(nGroups, false);
-    for (GId gid = 0; gid < nGroups; ++gid) {
-        if (seqBps[gid].size() != 1) continue;  // skip empty / always-active
-        const auto& bp = seqBps[gid].front();
-        if (bp.onset == 0 && bp.duration == cycleLength) continue;
-        wStart[gid] = ((bp.onset % cycleLength) + cycleLength) % cycleLength;
-        wLen[gid] = bp.duration;
-        present[gid] = true;
-    }
-    extendCrosswalkWindows(wStart, wLen, present, bestCfg, cycleLength);
-    for (GId gid = 0; gid < nGroups; ++gid)
-        if (present[gid] && bestCfg.groups[gid].kind == GKind::Crosswalk)
-            seqBps[gid].front() = {.onset = wStart[gid], .duration = wLen[gid]};
-
-    std::unordered_map<GId, Sequence> sequences;
-    for (GId gid = 0; gid < nGroups; ++gid) {
-        const auto& g = bestCfg.groups[gid];
-        int evAtomic = g.kind == GKind::Crosswalk ? 4 : 3;
-        int apAtomic = g.kind == GKind::Crosswalk ? 0 : 1;
-
-        std::vector<Interval> ivs = {};
-        bool alwaysActive = false;
-        for (const auto& bp : seqBps[gid]) {
-            if (bp.onset == 0 && bp.duration == cycleLength) {
-                alwaysActive = true;
-
-                break;
-            } else {
-                ivs.emplace_back(bp.onset, bp.duration, apAtomic, evAtomic);
-            }
-        }
-        if (alwaysActive) {
-            sequences[gid] = AlwaysActive{};
-        } else {
-            SignalSequence seq{};
-            seq.setIntervals(std::move(ivs));
-            sequences[gid] = std::move(seq);
-        }
-    }
-    return std::move(sequences);
-}
-
-signal_optimizer::OptimizeResult compileResult(
-    const GConfig& bestCfg, const GInput& inp,
-    const std::unordered_map<GId, Sequence>& seqMap) {
+signal_optimizer::OptimizeResult compileResult(const GConfig& bestCfg,
+                                               const GInput& inp,
+                                               const GCycle& best,
+                                               int cycleLength) {
     signal_optimizer::OptimizeResult out;
-    for (GId gid = 0; gid < (GId)bestCfg.groups.size(); ++gid) {
-        const auto& g = bestCfg.groups[gid];
-        Sequence seq = seqMap.at(gid);
+    out.cycleLength = cycleLength;
 
+    // bestCfg.groups is ordered [movement groups][crosswalk groups] (see
+    // config_generator.cpp), so gid already indexes the concatenation of
+    // mgResults then cgResults below — no separate remapping needed.
+    for (const auto& g : bestCfg.groups) {
         if (g.kind == GKind::Crosswalk) {
-            const auto& series = inp.series[g.seriesIdx];
+            const auto& series =
+                inp.series[static_cast<std::size_t>(g.seriesIdx)];
             out.cgResults.push_back(signal_optimizer::CrosswalkGroupResult{
                 .seriesId = series.id,
                 .crosswalks = series.crosswalks,
                 .minGreen = g.tMin,
-                .sequence = std::move(seq),
             });
         } else {
-            const auto& entry = inp.entries[g.entryIdx];
+            const auto& entry =
+                inp.entries[static_cast<std::size_t>(g.entryIdx)];
             signal_optimizer::MovementGroupResult mgr;
             mgr.isProtected = (g.kind == GKind::Protected);
             mgr.minGreen = g.tMin;
-            mgr.sequence = std::move(seq);
             for (int ci : g.clusterIdxs)
-                mgr.clusters.push_back(entry.clusters[ci].id);
+                mgr.clusters.push_back(
+                    entry.clusters[static_cast<std::size_t>(ci)].id);
             for (const StreamId& sid : g.streams)
                 if (const auto* mid = std::get_if<MovementId>(&sid))
                     mgr.movements.push_back(*mid);
             out.mgResults.push_back(std::move(mgr));
         }
     }
+
+    // GId (int) group keys already match the mgResults++cgResults
+    // concatenation order above, so the steps carry over as-is.
+    out.stages = best.steps;
+
     return out;
 }
 }  // namespace
 
 namespace signal_optimizer {
-std::optional<OptimizeResult> optimize(NodeId node, const Graph& graph,
-                                       const Demand& demand, int cycleLength) {
-    auto inp = buildInput(node, graph, demand, cycleLength);
-    if (inp.entries.empty() && inp.series.empty()) return std::nullopt;
+std::expected<OptimizeResult, OptimizeError> optimize(
+    NodeId node, const Graph& graph, const Demand& demand, int cycleLength,
+    std::function<bool()> cancelled,
+    std::function<void(int completed, int total)> progress) {
+    try {
+        if (!graph.data().nodes().alive(node))
+            return std::unexpected(OptimizeError::InvalidNode);
+        if (cycleLength <= 0)
+            return std::unexpected(OptimizeError::InvalidCycleLength);
+        if (cancelled && cancelled())
+            return std::unexpected(OptimizeError::Cancelled);
 
-    auto configs = generateConfigs(inp);
-    if (configs.empty()) return std::nullopt;
+        const Node* sourceNode = graph.data().nodes().get(node);
+        for (EntryId entryId : sourceNode->entries()) {
+            const Entry* entry = graph.data().entries().get(entryId);
+            if (entry == nullptr) continue;
+            for (ClusterId clusterId : entry->clusters()) {
+                const Cluster* cluster = graph.data().clusters().get(clusterId);
+                if (cluster == nullptr) continue;
+                for (MovementId movementId : cluster->movements())
+                    if (demand.data().flows().get(movementId) == nullptr)
+                        return std::unexpected(
+                            OptimizeError::MissingDemandData);
+            }
+        }
 
-    auto rawResult = pickBest(configs, inp.T);
-    if (!rawResult) return std::nullopt;
+        const auto& regulations = graph.regulations();
+        auto inp = buildInput(node, graph, demand, cycleLength);
+        if (inp.entries.empty() && inp.series.empty())
+            return std::unexpected(OptimizeError::NoStreams);
+        if (cancelled && cancelled())
+            return std::unexpected(OptimizeError::Cancelled);
 
-    const GConfig& bestCfg = configs[rawResult->cfgIdx];
-    const GCycle& best = rawResult->cycle;
+        auto configs = generateConfigs(inp);
+        if (configs.empty())
+            return std::unexpected(OptimizeError::NoConfigurations);
+        if (cancelled && cancelled())
+            return std::unexpected(OptimizeError::Cancelled);
 
-    auto seqMap = computeSequences(bestCfg, best, cycleLength);
-    return compileResult(bestCfg, inp, seqMap);
+        OptimizationStats stats;
+        auto rawResult =
+            pickBest(configs, inp.T, regulations, stats, cancelled, progress);
+        if (!rawResult) return std::unexpected(rawResult.error());
+
+        const GConfig& bestCfg =
+            configs[static_cast<std::size_t>(rawResult->cfgIdx)];
+        auto result =
+            compileResult(bestCfg, inp, rawResult->cycle, cycleLength);
+        result.stats = stats;
+        return result;
+    } catch (const std::exception&) {
+        return std::unexpected(OptimizeError::InternalFailure);
+    } catch (...) {
+        return std::unexpected(OptimizeError::InternalFailure);
+    }
 }
 }  // namespace signal_optimizer

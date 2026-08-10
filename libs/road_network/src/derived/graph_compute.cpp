@@ -1,15 +1,16 @@
 #include "graph_compute.hpp"
 
 #include <algorithm>
-#include <cassert>
 #include <cmath>
+#include <common/overloaded.hpp>
+#include <limits>
+#include <regulations/regulations.hpp>
+#include <regulations/types/stream_kind.hpp>
 
-#include "road_network/graph.hpp"
 #include "road_network/graph/derived/graph_geometry.hpp"
-#include "road_network/graph/derived/turn_type.hpp"
+#include "road_network/graph.hpp"
 #include "road_network/graph/graph_data.hpp"
-#include "road_network/util/ids.hpp"
-#include "road_network/util/overloaded.hpp"
+#include "road_network/util/compute_helpers.hpp"
 
 namespace graph_compute {
 namespace {
@@ -17,16 +18,14 @@ namespace {
 //
 //  ConflictMap
 //
-std::unordered_map<MovementId, std::vector<graph_geometry::MovementPolyline>>
-movementGeometries(const GraphData& data, NodeId id) {
-    std::unordered_map<MovementId,
-                       std::vector<graph_geometry::MovementPolyline>>
-        result;
+std::unordered_map<MovementId, std::vector<Polyline>> movementGeometries(
+    const GraphData& data, NodeId id) {
+    std::unordered_map<MovementId, std::vector<Polyline>> result;
     const auto* node = data.nodes().get(id);
     if (!node) return result;
+
     for (auto eId : node->entries()) {
         auto* e = data.entries().get(eId);
-
         for (auto mId : e->movements()) {
             result[mId] = graph_geometry::movementPolylines(data, mId);
         }
@@ -34,330 +33,302 @@ movementGeometries(const GraphData& data, NodeId id) {
     return result;
 }
 
-std::unordered_map<CrosswalkId, Crosswalk::Lines> crosswalkGeometries(
+std::unordered_map<CrosswalkId, CrosswalkGeometry> crosswalkGeometries(
     const GraphData& data, NodeId id) {
-    std::unordered_map<CrosswalkId, Crosswalk::Lines> result;
+    std::unordered_map<CrosswalkId, CrosswalkGeometry> result;
     auto* node = data.nodes().get(id);
     if (!node) return result;
 
     for (auto csId : node->crosswalkSeries()) {
         for (auto cId : data.crosswalkSeries().get(csId)->crosswalks()) {
-            result[cId] = data.crosswalks().get(cId)->lines();
+            result[cId] = data.crosswalks().get(cId)->geometry();
         }
     }
-
     return result;
 }
 
-void conflictsMovMov(
-    ConflictMap& out, MovementId evacId, MovementId approachId,
-    const std::vector<graph_geometry::MovementPolyline>& evacPaths,
-    const std::vector<graph_geometry::MovementPolyline>& approachPaths) {
+std::vector<ConflictPoint> movMovPoints(
+    const std::vector<Polyline>& evacPaths,
+    const std::vector<Polyline>& approachPaths) {
+    std::vector<ConflictPoint> cpVec;
     for (const auto& evacPath : evacPaths) {
         for (const auto& approachPath : approachPaths) {
-            auto pathIntersection =
-                evacPath.poly.lastIntersection(approachPath.poly);
+            auto pathIntersection = evacPath.lastIntersection(approachPath);
             if (!pathIntersection.has_value()) continue;
             auto pi = pathIntersection.value();
 
-            out[evacId][approachId].push_back(
-                {.position = pi.point,
-                 .evacDistance = pi.distanceA - evacPath.stopOffset,
-                 .approachDistance = pi.distanceB - approachPath.stopOffset});
+            cpVec.emplace_back(pi.point, pi.distanceA, pi.distanceB);
         }
     }
+    return cpVec;
 }
 
-void conflictsMovCross(
-    ConflictMap& out, MovementId evacId, CrosswalkId approachId,
-    const std::vector<graph_geometry::MovementPolyline>& evacPaths,
-    const Crosswalk::Lines& apprCrosswalk) {
+std::vector<ConflictPoint> movCrossPoints(
+    const std::vector<Polyline>& evacPaths,
+    const CrosswalkGeometry& apprCrosswalk) {
+    std::vector<ConflictPoint> cpVec;
     for (const auto& evacPath : evacPaths) {
-        auto intersection1 = evacPath.poly.firstIntersection(apprCrosswalk.l1);
-        if (!intersection1) continue;
-        auto intersection2 = evacPath.poly.firstIntersection(apprCrosswalk.l2);
-
-        // TODO: IntergreenDiagnostic { MovementId, CrosswalkId };
-        // struct IntergreenResult { StreamIntergreenMap;
-        // std::vector<IntergreenDiagnostic> };
-        assert(intersection2 &&
-               "movement crosses crosswalk entry but not exit - malformed "
-               "geometry");
-
-        auto& furthest = intersection1->distanceA > intersection2->distanceA
-                             ? intersection1
-                             : intersection2;
-
-        out[evacId][approachId].push_back({
-            .position = furthest->point,
-            .evacDistance = furthest->distanceA - evacPath.stopOffset,
-            .approachDistance = 0.f,
-        });
+        // The crosswalk is a band between its anchor and split lines; the
+        // evacuating vehicle has cleared it at the farther edge crossing.
+        auto anchor = evacPath.firstIntersection(apprCrosswalk.anchor);
+        auto split = evacPath.firstIntersection(apprCrosswalk.split);
+        const auto& furthest =
+            !split || (anchor && anchor->distanceA > split->distanceA) ? anchor
+                                                                       : split;
+        if (!furthest) continue;
+        cpVec.push_back({.position = furthest->point,
+                         .evacDistance = furthest->distanceA,
+                         .apprDistance = 0.0});
     }
+    return cpVec;
 }
-void conflictsCrossMov(
-    ConflictMap& out, CrosswalkId evacId, MovementId approachId,
-    const Crosswalk::Lines& evacCrosswalk,
-    const std::vector<graph_geometry::MovementPolyline>& approachPaths) {
+
+std::vector<ConflictPoint> crossMovPoints(
+    const CrosswalkGeometry& evacCrosswalk,
+    const std::vector<Polyline>& approachPaths) {
+    std::vector<ConflictPoint> cpVec;
+    const double maxCrosswalkLineLength =
+        std::max(evacCrosswalk.anchor.length(), evacCrosswalk.split.length());
     for (const auto& approachPath : approachPaths) {
-        auto intersection1 =
-            approachPath.poly.firstIntersection(evacCrosswalk.l1);
-        if (!intersection1) continue;
-        auto intersection2 =
-            approachPath.poly.firstIntersection(evacCrosswalk.l2);
-
-        assert(intersection2 &&
-               "Invalid intersection geometry where movement doesn't "
-               "cross both ends of a crosswalk");
-
-        auto& closest = intersection1->distanceA < intersection2->distanceA
-                            ? intersection1
-                            : intersection2;
-        float maxCrosswalkLineLength =
-            std::max(evacCrosswalk.l1.length(), evacCrosswalk.split.length());
-
-        out[evacId][approachId].push_back(
-            {.position = closest->point,
-             .evacDistance = maxCrosswalkLineLength,
-             .approachDistance = closest->distanceB - approachPath.stopOffset});
+        // The approaching vehicle meets the band at the nearer edge crossing;
+        // the evacuating pedestrian worst-case clears the full span.
+        auto anchor = approachPath.firstIntersection(evacCrosswalk.anchor);
+        auto split = approachPath.firstIntersection(evacCrosswalk.split);
+        const auto& closest =
+            !split || (anchor && anchor->distanceA < split->distanceA) ? anchor
+                                                                       : split;
+        if (!closest) continue;
+        cpVec.push_back({.position = closest->point,
+                         .evacDistance = maxCrosswalkLineLength,
+                         .apprDistance = closest->distanceA});
     }
+    return cpVec;
 }
-
-//
-//  IntergreenStreamMap
-//
-struct StreamParams {
-    float t_y;    // yellow time
-    float l_p;    // length extension for evac
-    float v_e;    // evacuation speed
-    float v_d;    // approach speed
-    float t_min;  // min intergreen time
-};
-
-StreamParams streamParams(const GraphData& data, StreamId id) {
-    return std::visit(
-        overloaded{[&](MovementId mid) -> StreamParams {
-                       auto* m = data.movements().get(mid);
-
-                       float speedLimit =
-                           std::min(data.entries().get(m->from())->speedLimit(),
-                                    data.exits().get(m->to())->speedLimit());
-
-                       float travelSpeed;
-                       switch (graph_geometry::classifyTurn(data, mid)) {
-                           case TurnType::UTURN:
-                               travelSpeed = 8.33f;
-                               break;
-                           case TurnType::LEFT:
-                               travelSpeed = 11.11f;
-                               break;
-                           case TurnType::RIGHT:
-                               travelSpeed = 8.33f;
-                               break;
-                           case TurnType::THROUGH:
-                               travelSpeed = speedLimit;
-                               break;
-                       }
-
-                       switch (m->type()) {
-                           default:
-                           case MovementType::VEHICLE:
-                               return {.t_y = 3.f,
-                                       .l_p = 10.f,
-                                       .v_e = std::min(
-                                           {travelSpeed, speedLimit, 14.f}),
-                                       .v_d = std::max(speedLimit, 16.7f),
-                                       .t_min = 1.f};
-                               // case MovementType::BUS:
-                               //     return {.t_y = 3.f,
-                               //             .l_p = 14.f,
-                               //             .v_e = std::min(speedLimit, 10.f),
-                               //             .v_d = std::min(speedLimit, 10.f),
-                               //             .t_min = 1.f};
-                               // case MovementType::TRAM:
-                               //     return {.t_y = 3.f,
-                               //             .l_p = 13.5f,  // per wagon —
-                               //             caller multiplies .v_e =
-                               //             std::min(speedLimit, 10.f), .v_d =
-                               //             std::min(speedLimit, 10.f), .t_min
-                               //             = 1.f};
-                       }
-                   },
-                   [&](CrosswalkId cid) -> StreamParams {
-                       auto* cw = data.crosswalks().get(cid);
-                       bool isCyclist = cw->type() == CrosswalkType::CYCLIST;
-                       return isCyclist ? StreamParams{.t_y = 0.f,
-                                                       .l_p = 0.f,
-                                                       .v_e = 4.2f,
-                                                       .v_d = 4.2f,
-                                                       .t_min = 4.0f}
-                                        : StreamParams{.t_y = 0.f,
-                                                       .l_p = 0.f,
-                                                       .v_e = 1.4f,
-                                                       .v_d = 1.4f,
-                                                       .t_min = 4.0f};
-                   }},
-        id);
-}
-
 }  // namespace
 
-ConflictMap conflictMap(const GraphData& data, NodeId id) {
-    ConflictMap cm;
+StreamMatrix<std::vector<ConflictPoint>> conflictMap(const GraphData& data,
+                                                     NodeId id) {
+    StreamMatrix<std::vector<ConflictPoint>> cm;
 
     auto movGeometries = movementGeometries(data, id);
     auto crossGeometries = crosswalkGeometries(data, id);
 
-    /// MOVEMENT->MOVEMENT Conflicts
-    for (const auto& [evacId, evacGeo] : movGeometries) {
-        auto* evac = data.movements().get(evacId);
-        if (!evac) continue;
-        for (const auto& [approachId, approachGeo] : movGeometries) {
-            auto* approach = data.movements().get(approachId);
-            if (!approach) continue;
-            if (evac->from() == approach->from()) continue;
-            conflictsMovMov(cm, evacId, approachId, evacGeo, approachGeo);
+    /// MOVEMENT <-> MOVEMENT
+    for (auto a = movGeometries.begin(); a != movGeometries.end(); ++a) {
+        auto* aMov = data.movements().get(a->first);
+        if (!aMov) continue;
+        for (auto b = std::next(a); b != movGeometries.end(); ++b) {
+            auto* bMov = data.movements().get(b->first);
+            if (!bMov) continue;
+            if (aMov->from() == bMov->from()) continue;
+            auto ab = movMovPoints(a->second, b->second);
+            auto ba = movMovPoints(b->second, a->second);
+            if (ab.empty() && ba.empty()) continue;  // paths never cross
+            cm.set(a->first, b->first, std::move(ab), std::move(ba));
         }
     }
 
-    /// MOVEMENT->CROSSING Conflicts
-    for (const auto& [evacId, evacGeo] : movGeometries) {
-        for (const auto& [approachId, approachGeo] : crossGeometries) {
-            conflictsMovCross(cm, evacId, approachId, evacGeo, approachGeo);
-        }
-    }
-
-    /// CROSSING->MOVEMENT Conflicts
-    for (const auto& [evacId, evacGeo] : crossGeometries) {
-        for (const auto& [approachId, approachGeo] : movGeometries) {
-            conflictsCrossMov(cm, evacId, approachId, evacGeo, approachGeo);
+    /// MOVEMENT <-> CROSSWALK
+    for (const auto& [movId, movGeo] : movGeometries) {
+        for (const auto& [crossId, crossGeo] : crossGeometries) {
+            auto movToCross = movCrossPoints(movGeo, crossGeo);
+            auto crossToMov = crossMovPoints(crossGeo, movGeo);
+            if (movToCross.empty() && crossToMov.empty()) continue;
+            cm.set(movId, crossId, std::move(movToCross),
+                   std::move(crossToMov));
         }
     }
 
     return cm;
 }
+}  // namespace graph_compute
 
-StreamIntergreenMap streamIntergreenMap(const Graph& graph, NodeId id) {
-    StreamIntergreenMap result;
-    const auto* conflicts = graph.derived().conflict().get(id);
-    assert(conflicts && "Conflicts missing for StreamIntergreenMap");
-    if (!conflicts) return result;
+//
+// StreamIntergreenMaps
+//
 
-    for (const auto& [evacuatingId, row] : *conflicts) {
-        auto evac = streamParams(graph.data(), evacuatingId);
-        for (const auto& [approachingId, conflictPoints] : row) {
-            auto appr = streamParams(graph.data(), approachingId);
-            float t_last = std::numeric_limits<float>::min();
-            StreamIntergreenEntry ig;
-            for (const auto& cp : conflictPoints) {
-                float t_e = (cp.evacDistance + evac.l_p) / evac.v_e;
-                float t_d = cp.approachDistance / appr.v_d;
-                float t = evac.t_y + t_e - t_d;
-                float t_max = std::ceil(std::max(t, evac.t_min));
-                if (t > t_last) {
-                    ig = {.t_max = static_cast<int>(t_max),
-                          .diag = {.s_evac = cp.evacDistance,
-                                   .s_appr = cp.approachDistance,
-                                   .v_evac = evac.v_e,
-                                   .v_appr = appr.v_d,
-                                   .l_evac = evac.l_p,
-                                   .t_y = evac.t_y,
-                                   .t_min = evac.t_min,
-                                   .t_evac = t_e,
-                                   .t_appr = t_d,
-                                   .t_raw = t}};
-                    t_last = t;
-                }
+namespace {
+struct StreamParams {
+    StreamKind kind;
+    double v_evac;  // evacuation speed (v_e)
+    double v_appr;  // approach speed (v_d). Crosswalk conflicts always carry
+                    // s_appr == 0 (see movCrossPoints), so this only needs
+                    // to be nonzero to keep t_appr's s_appr/v_appr out of 0/0.
+    double l_evac;  // clearing length  (l_p)
+    double t_y;     // yellow time
+};
+
+StreamParams streamParams(const Graph& graph, StreamId id) {
+    const auto& data = graph.data();
+    const auto& reg = graph.regulations();
+    return std::visit(
+        overloaded{
+            [&](MovementId mid) -> StreamParams {
+                const auto* m = data.movements().get(mid);
+                double eLimit =
+                    data.entries().get(m->from())->params().speedLimit;
+                double xLimit = data.exits().get(m->to())->params().speedLimit;
+                auto turn = compute::turnKind(data, reg, mid);
+                auto k = reg.kinematics(m->params().kind(), turn);
+                double v_appr =
+                    k.approachSpeedFloor
+                        ? std::max({eLimit, xLimit, *k.approachSpeedFloor})
+                        : std::max(eLimit, xLimit);
+                return {.kind = m->params().kind(),
+                        .v_evac = std::min({eLimit, xLimit, k.evacSpeedCeil}),
+                        .v_appr = v_appr,
+                        .l_evac = k.clearingLength,
+                        .t_y = k.yellowTime};
+            },
+            [&](CrosswalkId cid) -> StreamParams {
+                const auto* cw = data.crosswalks().get(cid);
+                const auto& cs = data.crosswalkSeries().get(cw->parent());
+                auto skind = toStreamKind(cs->params().type);
+                auto k = reg.kinematics(skind);
+                return {.kind = skind,
+                        .v_evac = k.evacSpeedCeil,
+                        .v_appr = -1.0,  // any nonzero value; s_appr is 0
+                        .l_evac = k.clearingLength,
+                        .t_y = k.yellowTime};
+            }},
+        id);
+}
+}  // namespace
+namespace graph_compute {
+StreamIntergreenMaps streamIntergreenMaps(const Graph& graph, NodeId id) {
+    const auto* conflicts = graph.derived().conflicts().get(id);
+    assert(conflicts);
+    if (!conflicts) return {};
+
+    const auto& reg = graph.regulations();
+    std::unordered_map<StreamId, StreamParams> cache;
+    auto paramsOf = [&](StreamId sid) -> const StreamParams& {
+        auto it = cache.find(sid);
+        if (it == cache.end())
+            it = cache.emplace(sid, streamParams(graph, sid)).first;
+        return it->second;
+    };
+
+    auto intergreen = [&](StreamId evacId, StreamId apprId,
+                          const std::vector<ConflictPoint>& cps) {
+        const auto& evac = paramsOf(evacId);
+        const auto& appr = paramsOf(apprId);
+
+        IntergreenDiagnostic::Base base{
+            .v_evac = evac.v_evac,
+            .v_appr = appr.v_appr,
+            .l_evac = evac.l_evac,
+            .t_y = evac.t_y,
+            .t_min = reg.intergreenFloor(evac.kind, appr.kind),
+            .t_apprAdd = reg.approachReactionMargin()};
+
+        IntergreenDiagnostic best{.base = base};
+        double tBest = std::numeric_limits<double>::lowest();
+        for (const auto& cp : cps) {
+            IntergreenDiagnostic diag{.base = base,
+                                      .s_evac = cp.evacDistance,
+                                      .s_appr = cp.apprDistance};
+            if (double t = diag.t_raw(); t > tBest) {
+                tBest = t;
+                best = diag;
             }
-            result[evacuatingId][approachingId] = ig;
         }
-    }
+        int max = static_cast<int>(std::ceil(std::max(tBest, base.t_min)));
+        return std::pair{max, best};
+    };
+
+    StreamIntergreenMaps result;
+    conflicts->forEachPair([&](StreamId evacId, StreamId apprId,
+                               const std::vector<ConflictPoint>& cpsFwd,
+                               const std::vector<ConflictPoint>& cpsRev) {
+        auto [maxFwd, diagFwd] = intergreen(evacId, apprId, cpsFwd);
+        auto [maxRev, diagRev] = intergreen(apprId, evacId, cpsRev);
+        result.max.set(evacId, apprId, maxFwd, maxRev);
+        result.diag.set(evacId, apprId, diagFwd, diagRev);
+    });
     return result;
 }
 
-StreamPermittedMap streamPermittedMap(const Graph& graph, NodeId id,
-                                      StreamPermittedCtx ctx) {
-    StreamPermittedMap result;
+//
+// StreamPermittedMap
+//
+StreamMatrix<bool> streamPermittedMap(const Graph& graph, NodeId id) {
+    const auto* conflicts = graph.derived().conflicts().get(id);
+    assert(conflicts);
+    if (!conflicts) return {};
+
     const auto& data = graph.data();
-    const auto* conflicts = graph.derived().conflict().get(id);
-    assert(conflicts && "Conflicts missing for StreamPermittedMap");
-    if (!conflicts) return result;
+    const auto& reg = graph.regulations();
 
-    auto isOpposing = [&](EntryId a, EntryId b) -> bool {
-        const auto* ea = data.entries().get(a);
-        const auto* eb = data.entries().get(b);
-        if (!ea || !eb) return false;
-        return ea->heading().dot(eb->heading()) < ctx.kOpposingThreshold;
-    };
+    StreamMatrix<bool> result;
 
-    auto isParallelToCrosswalk = [&](EntryId entryId,
-                                     CrosswalkId cwId) -> bool {
-        const auto* entry = data.entries().get(entryId);
-        const auto* cw = data.crosswalks().get(cwId);
-        if (!entry || !cw) return false;
-        Vector2 crossDir = cw->params().line.direction().normalized();
-        return std::abs(entry->heading().dot(crossDir)) >
-               ctx.kParallelThreshold;
-    };
-
-    auto isPermitted = [&](StreamId evacId, StreamId apprId) -> bool {
+    auto streamVector = [&](StreamId id) {
         return std::visit(
-            overloaded{
-                [&](MovementId evacMid) {
-                    return std::visit(
-                        overloaded{
-                            [&](MovementId apprMid) -> bool {
-                                if (graph_geometry::isOpposingEntry(
-                                        data, evacMid, apprMid)) {
-                                    // max turn lane for perm movement rule
-                                    auto tt = graph_geometry::classifyTurn(
-                                        data, evacMid);
-                                    if (tt == TurnType::UTURN ||
-                                        tt == TurnType::LEFT) {
-                                        const auto* em =
-                                            data.movements().get(evacMid);
-                                        return em->lanes().size() <=
-                                               ctx.permMaxTurnLaneMovementLaneCount;
-                                    }
-                                    return true;
-                                }
-                                return false;
-                            },
-                            [&](CrosswalkId apprCid) -> bool {
-                                const auto* em = data.movements().get(evacMid);
-                                if (!em) return false;
-                                return isParallelToCrosswalk(em->from(),
-                                                             apprCid);
-                            }},
-                        apprId);
-                },
-                [&](CrosswalkId evacCid) {
-                    return std::visit(
-                        overloaded{[&](MovementId apprMid) -> bool {
-                                       const auto* am =
-                                           data.movements().get(apprMid);
-                                       if (!am) return false;
-                                       return isParallelToCrosswalk(am->from(),
-                                                                    evacCid);
-                                   },
-                                   [&](CrosswalkId) -> bool { return false; }},
-                        apprId);
-                }},
-            evacId);
+            overloaded{[&](MovementId mid) {
+                           const auto* m = data.movements().get(mid);
+                           const auto* e = data.entries().get(m->from());
+                           return e->params().heading;
+                       },
+                       [&](CrosswalkId cid) {
+                           const auto* cw = data.crosswalks().get(cid);
+                           return cw->geometry().anchor.direction();
+                       }},
+            id);
     };
 
-    for (const auto& [evacuatingId, row] : *conflicts) {
-        for (const auto& [approachingId, conflictPoints] : row) {
-            if (conflictPoints.empty()) continue;
+    conflicts->forEachPair([&](StreamId evacId, StreamId apprId,
+                               const std::vector<ConflictPoint>&,
+                               const std::vector<ConflictPoint>&) {
+        // TODO: Expand to match 2311_2019: 8.3.2(a-e)
+        bool fwd = reg.isParallel(streamVector(evacId), streamVector(apprId));
+        bool rev = reg.isParallel(streamVector(apprId), streamVector(evacId));
+        result.set(evacId, apprId, fwd, rev);
+    });
 
-            bool permitted = isPermitted(evacuatingId, approachingId);
+    return result;
+}
 
-            if (permitted) {
-                result[evacuatingId].insert(approachingId);
-                result[approachingId].insert(evacuatingId);
-            }
-        }
-    }
+//
+// StreamApproachMap
+//
+StreamMatrix<int> streamApproachMap(const Graph& graph, NodeId id) {
+    const auto* conflicts = graph.derived().conflicts().get(id);
+    assert(conflicts);
+    if (!conflicts) return {};
+
+    std::unordered_map<StreamId, StreamParams> cache;
+    auto paramsOf = [&](StreamId sid) -> const StreamParams& {
+        auto it = cache.find(sid);
+        if (it == cache.end())
+            it = cache.emplace(sid, streamParams(graph, sid)).first;
+        return it->second;
+    };
+
+    // Travel time for the approaching stream to reach the shared point, taking
+    // the nearest conflict point (soonest arrival) as the binding deadline.
+    // Floored, so the deadline is conservative. -1 (inactive) when the pair
+    // never meets, or when the approaching stream is a crosswalk: pedestrians
+    // are already at the line, so they impose no deadline on anyone else.
+    auto approach = [&](StreamId apprId,
+                        const std::vector<ConflictPoint>& cps) -> int {
+        if (std::holds_alternative<CrosswalkId>(apprId)) return -1;
+        const auto& appr = paramsOf(apprId);
+        double best = std::numeric_limits<double>::max();
+        for (const auto& cp : cps)
+            best = std::min(best, cp.apprDistance / appr.v_appr);
+        if (best == std::numeric_limits<double>::max()) return -1;
+        return static_cast<int>(std::floor(best));
+    };
+
+    StreamMatrix<int> result;
+    conflicts->forEachPair([&](StreamId evacId, StreamId apprId,
+                               const std::vector<ConflictPoint>& cpsFwd,
+                               const std::vector<ConflictPoint>& cpsRev) {
+        // Forward points have apprId approaching, so its travel time bounds
+        // evacId (and symmetrically for the reverse).
+        result.set(evacId, apprId, approach(apprId, cpsFwd),
+                   approach(evacId, cpsRev));
+    });
     return result;
 }
 }  // namespace graph_compute

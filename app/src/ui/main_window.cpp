@@ -1,15 +1,17 @@
 #include "main_window.hpp"
 
-#include "network/network_scene.hpp"
-#include "network/network_view.hpp"
+#include "root/project.hpp"
+#include "ui/road_network/road_network_panel.hpp"
 
-MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
-    setWindowTitle("Intersection Modeler");
+MainWindow::MainWindow(Project& project, QWidget* parent)
+    : QMainWindow(parent),
+      core_{.doc = project.document(),
+            .bus = project.bus(),
+            .project = project,
+            .xf = {}} {
+    setWindowTitle("Dyplom");
     resize(1280, 800);
 
-    scene_ = new NetworkScene(this);
-    scene_->setSceneRect(-1e9, -1e9, 2e9, 2e9);
-    view_ = new NetworkView(this);
-    view_->setScene(scene_);
-    setCentralWidget(view_);
+    roadNetworkPanel_ = new RoadNetworkPanel(core_, this);
+    setCentralWidget(roadNetworkPanel_);
 }

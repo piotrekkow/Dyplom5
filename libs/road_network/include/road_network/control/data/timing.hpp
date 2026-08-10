@@ -1,41 +1,25 @@
 #pragma once
 
-#include <expected>
-#include <unordered_map>
+#include <string>
 
-#include "../control_errors.hpp"
 #include "road_network/util/ids.hpp"
-#include "sequence.hpp"
+#include "stage_step.hpp"
 
 class Timing {
    public:
-    Timing(SignalConfigId at, int cycleLength)
-        : at_(at), cycleLength_(cycleLength) {}
+    struct Params {
+        std::string name;
+        std::vector<StageStep> steps;
+    };
 
-    [[nodiscard]] const Sequence& sequence(SignalGroupId sg) const {
-        return sequences_.at(sg);
-    }
-    [[nodiscard]] int cycleLength() const { return cycleLength_; }
-    [[nodiscard]] SignalConfigId at() const { return at_; }
+    Timing(NodeId at, std::string name)
+        : at_(at), params_{.name = std::move(name)} {}
 
-    std::expected<void, TimingError> setCycleLength(int t);
-    void createNewSequence(SignalGroupId sg);
-    std::expected<void, TimingError> setIntervals(
-        SignalGroupId sg, std::vector<Interval> intervals);
-
-    [[nodiscard]] bool hasSequence(SignalGroupId sg) const {
-        return sequences_.contains(sg);
-    }
-    void removeSequence(SignalGroupId sg) { sequences_.erase(sg); }
-    void insertSequence(SignalGroupId sg, Sequence seq) {
-        sequences_[sg] = std::move(seq);
-    }
-    void setAlwaysActive(SignalGroupId sg) {
-        sequences_.at(sg) = AlwaysActive{};
-    }
+    [[nodiscard]] NodeId at() const { return at_; }
+    [[nodiscard]] const Params& params() const { return params_; }
+    Params& params() { return params_; }
 
    private:
-    SignalConfigId at_;
-    std::unordered_map<SignalGroupId, Sequence> sequences_{};
-    int cycleLength_;
+    NodeId at_;
+    Params params_;
 };

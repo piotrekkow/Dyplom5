@@ -1,20 +1,44 @@
 #pragma once
 
+#include <common/slot_array.hpp>
+
+#include "derived/flow_ratio.hpp"
 #include "derived/saturation.hpp"
+#include "road_network/demand/data/saturation_override.hpp"
 #include "road_network/util/ids.hpp"
-#include "road_network/util/slot_array.hpp"
 
 class DemandDerived {
    public:
-    [[nodiscard]] const SlotArray<EntryLaneTag, Saturation>& laneSaturations()
-        const {
+    [[nodiscard]] const SlotArray<EntryTag, std::vector<Saturation>>&
+    laneSaturations() const {
         return laneSaturations_;
     }
 
-    SlotArray<EntryLaneTag, Saturation>& laneSaturations() {
+    [[nodiscard]] const SlotArray<MovementTag, FlowRatio>& flowRatios() const {
+        return flowRatios_;
+    }
+
+    // Per-movement base saturation from the regulations (turn class +
+    // opposing flow), before any override — what an override replaces.
+    [[nodiscard]] const SlotArray<MovementTag, Saturation>& baseSaturations()
+        const {
+        return baseSaturations_;
+    }
+
+    SlotArray<EntryTag, std::vector<Saturation>>& laneSaturations() {
         return laneSaturations_;
+    }
+
+    SlotArray<MovementTag, FlowRatio>& flowRatios() { return flowRatios_; }
+
+    SlotArray<MovementTag, Saturation>& baseSaturations() {
+        return baseSaturations_;
     }
 
    private:
-    SlotArray<EntryLaneTag, Saturation> laneSaturations_;
+    SlotArray<EntryTag, std::vector<Saturation>> laneSaturations_;
+    SlotArray<MovementTag, FlowRatio> flowRatios_;
+    SlotArray<MovementTag, Saturation> baseSaturations_;
 };
+
+

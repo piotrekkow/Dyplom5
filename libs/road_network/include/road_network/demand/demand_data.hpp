@@ -1,9 +1,10 @@
 #pragma once
 
+#include <common/slot_array.hpp>
+
 #include "data/flow.hpp"
 #include "data/saturation_override.hpp"
 #include "road_network/util/ids.hpp"
-#include "road_network/util/slot_array.hpp"
 
 class DemandData {
    public:

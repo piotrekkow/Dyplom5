@@ -1,65 +1,84 @@
 #include "demand_editor.hpp"
 
 #include <road_network/demand.hpp>
-#include <road_network/graph/derived/graph_geometry.hpp>
-#include <road_network/graph/graph_data.hpp>
+#include <road_network/graph.hpp>
 
 #include "bus/network_event_bus.hpp"
-#include "bus/network_events.hpp"
-#include "root/command/solve_priority.hpp"
-#include "root/command/transaction.hpp"
+#include "util/apply_tx.hpp"
 
-void DemandEditor::onMovementCreatedTx(Transaction& tx, MovementId id) {
-    setFlowTx(tx, id, {0.f});
-    setSaturationOverrideTx(tx, id, {});
+DemandEditor::DemandEditor(Demand& demand, const Graph& graph,
+                           NetworkEventBus& bus, DirtyEventBus& dirty)
+    : demand_(demand), graph_(graph), bus_(bus), dirty_(dirty) {
+    subs_.add(dirty_.movementCreated, [this](CreatedTx<MovementId, NodeId> e) {
+        onMovementCreated(e);
+    });
+    subs_.add(dirty_.movementRemoved, [this](RemovedTx<MovementId, NodeId> e) {
+        onMovementRemoved(e);
+    });
+    subs_.add(dirty_.entryRemoved,
+              [this](RemovedTx<EntryId, NodeId> e) { onEntryRemoved(e); });
 }
 
-void DemandEditor::onMovementRemovedTx(Transaction& tx, MovementId id) {
-    eraseFlowTx(tx, id);
-    eraseSaturationOverrideTx(tx, id);
+void DemandEditor::onMovementCreated(CreatedTx<MovementId, NodeId> e) {
+    setFlow(e.tx, e.id, e.at, {0});
+    setSaturationOverride(e.tx, e.id, e.at, {});
 }
 
-void DemandEditor::setFlowTx(Transaction& tx, MovementId at, Flow flow) {
-    auto mut = demand_.setFlow(at, flow);
-    tx.recordUndo(std::move(mut.undo), bus_.flowChanged, FlowChanged{at});
-    tx.recordEvent(bus_.flowChanged, FlowChanged{at});
-    onDemandStale(tx, at);
+void DemandEditor::onMovementRemoved(RemovedTx<MovementId, NodeId> e) {
+    clearFlow(e.tx, e.id, e.at);
+    clearSaturationOverride(e.tx, e.id, e.at);
 }
 
-void DemandEditor::eraseFlowTx(Transaction& tx, MovementId at) {
-    auto mut = demand_.eraseFlow(at);
-    tx.recordUndo(std::move(mut.undo), bus_.flowChanged, FlowChanged{at});
-    tx.recordEvent(bus_.flowErased, FlowErased{at});
-    onDemandStale(tx, at);
+void DemandEditor::onEntryRemoved(RemovedTx<EntryId, NodeId> e) {
+    demand_.markDirty(e.id);
+    demand_.markDirty(e.at);
 }
 
-void DemandEditor::setSaturationOverrideTx(Transaction& tx, MovementId at,
-                                           SaturationOverride override) {
-    auto mut = demand_.setSaturationOverride(at, override);
-    tx.recordUndo(std::move(mut.undo), bus_.saturationOverrideChanged,
-                  SaturationOverrideChanged{at});
-    tx.recordEvent(bus_.saturationOverrideChanged,
-                   SaturationOverrideChanged{at});
-    onDemandStale(tx, at);
+void DemandEditor::setFlow(Transaction& tx, MovementId mov, NodeId at,
+                           Flow flow) {
+    auto mut = demand_.setFlow(mov, at, flow);
+    applyTxUpdate(tx, std::move(mut), bus_.flowSet,
+                  Set<FlowTag, MovementId>{.at = mov});
 }
 
-void DemandEditor::eraseSaturationOverrideTx(Transaction& tx, MovementId at) {
-    auto mut = demand_.eraseSaturationOverride(at);
-    tx.recordUndo(std::move(mut.undo), bus_.saturationOverrideChanged,
-                  SaturationOverrideChanged{at});
-    tx.recordEvent(bus_.saturationOverrideErased, SaturationOverrideErased{at});
-    onDemandStale(tx, at);
+void DemandEditor::clearFlow(Transaction& tx, MovementId mov, NodeId at) {
+    auto mut = demand_.clearFlow(mov, at);
+    applyTxUpdate(tx, std::move(mut), bus_.flowCleared,
+                  Cleared<FlowTag, MovementId>{.at = mov});
 }
 
-void DemandEditor::onDemandStale(Transaction& tx, MovementId at) {
-    if (const auto* m = graph_.movements().get(at)) {
-        EntryId entry = m->from();
-        tx.recordEvent(bus_.demandRederived, DemandRederived{entry});
-        tx.recordUndoEvent(bus_.demandRederived, DemandRederived{entry});
-        if (auto opp = graph_geometry::findOpposingEntry(graph_, entry)) {
-            tx.recordEvent(bus_.demandRederived, DemandRederived{*opp});
-            tx.recordUndoEvent(bus_.demandRederived, DemandRederived{*opp});
+void DemandEditor::setSaturationOverride(Transaction& tx, MovementId mov,
+                                         NodeId at, SaturationOverride value) {
+    auto mut = demand_.setSaturationOverride(mov, at, value);
+    applyTxUpdate(tx, std::move(mut), bus_.saturationOverrideSet,
+                  Set<SaturationOverrideTag, MovementId>{.at = mov});
+}
+
+void DemandEditor::clearSaturationOverride(Transaction& tx, MovementId mov,
+                                           NodeId at) {
+    auto mut = demand_.clearSaturationOverride(mov, at);
+    applyTxUpdate(tx, std::move(mut), bus_.saturationOverrideCleared,
+                  Cleared<SaturationOverrideTag, MovementId>{.at = mov});
+}
+
+void DemandEditor::registerSolve(Transaction& tx) {
+    reEntries_.clear();
+    tx.addSolve(SolvePriority::DEMAND, {.rederive = [this] { rederive(); },
+                                        .flush = [this] { flush(); }});
+}
+
+void DemandEditor::rederive() {
+    auto r = demand_.solve(graph_.data());
+    reEntries_.insert(r.entries.begin(), r.entries.end());
+}
+
+void DemandEditor::flush() {
+    for (auto id : reEntries_) {
+        if (graph_.data().entries().alive(id)) {
+            const auto at = graph_.parentOf(id);
+            bus_.entryUpdated.publish(
+                Updated<EntryId, NodeId>{.id = id, .at = at});
         }
     }
-    tx.addSolve(SolvePriority::DEMAND, [this] { demand_.solve(graph_); });
+    reEntries_.clear();
 }

@@ -1,539 +1,539 @@
 #include "graph_editor.hpp"
 
-#include <algorithm>
 #include <expected>
-#include <functional>
-#include <ranges>
 #include <road_network/graph.hpp>
-#include <road_network/graph/derived/graph_geometry.hpp>
-#include <road_network/util/geometry/line.hpp>
+#include <road_network/util/compute_helpers.hpp>
 
+#include "bus/dirty_event_bus.hpp"
 #include "bus/network_event_bus.hpp"
-#include "bus/network_events.hpp"
-#include "road_network/util/ids.hpp"
-#include "root/command/solve_priority.hpp"
-#include "root/command/transaction.hpp"
-#include "root/editor/errors/graph_errors.hpp"
+#include "regulations/types/stream_kind.hpp"
+#include "util/apply_tx.hpp"
 
-//
-//  CREATE TX
-//
-
-NodeId GraphEditor::createNodeTx(Transaction& tx, Position center) {
+// creation
+NodeId GraphEditor::createNode(Transaction& tx, Position center) {
     auto mut = graph_.createNode(center);
-    tx.recordUndo(std::move(mut.undo), bus_.nodeRemoved, NodeRemoved{mut.id});
-    tx.recordEvent(bus_.nodeCreated, NodeCreated{mut.id});
-    onNodeStale(tx, mut.id);
-    return mut.id;
+    const auto nid = mut.id;
+    return applyTx(tx, std::move(mut), bus_.nodeCreated, Created<NodeId>{nid},
+                   bus_.nodeRemoved, Removed<NodeId>{nid});
 }
-
-EntryId GraphEditor::createEntryTx(Transaction& tx, NodeId at,
-                                   Position position, Vector2 heading) {
-    auto mut = graph_.createEntry(at, position, heading);
-    tx.recordUndo(std::move(mut.undo), bus_.entryRemoved,
-                  EntryRemoved{mut.id, at});
-    tx.recordEvent(bus_.entryCreated, EntryCreated{mut.id, at});
-    onNodeStale(tx, at);
-    return mut.id;
-}
-
-ExitId GraphEditor::createExitTx(Transaction& tx, NodeId at, Position position,
+EntryId GraphEditor::createEntry(Transaction& tx, NodeId at, Position position,
                                  Vector2 heading) {
-    auto mut = graph_.createExit(at, position, heading);
-    tx.recordUndo(std::move(mut.undo), bus_.exitRemoved,
-                  ExitRemoved{mut.id, at});
-    tx.recordEvent(bus_.exitCreated, ExitCreated{mut.id, at});
-    onNodeStale(tx, at);
-    return mut.id;
+    auto mut = graph_.createEntry(at, position, heading.normalized());
+    const auto eid = mut.id;
+    return applyTx(tx, std::move(mut), bus_.entryCreated,
+                   Created<EntryId, NodeId>{.id = eid, .at = at},
+                   bus_.entryRemoved,
+                   Removed<EntryId, NodeId>{.id = eid, .at = at});
 }
-
-CrosswalkSeriesId GraphEditor::createCrosswalkSeriesTx(Transaction& tx,
-                                                       NodeId at) {
+ExitId GraphEditor::createExit(Transaction& tx, NodeId at, Position position,
+                               Vector2 heading) {
+    auto mut = graph_.createExit(at, position, heading.normalized());
+    const auto xid = mut.id;
+    return applyTx(tx, std::move(mut), bus_.exitCreated,
+                   Created<ExitId, NodeId>{.id = xid, .at = at},
+                   bus_.exitRemoved,
+                   Removed<ExitId, NodeId>{.id = xid, .at = at});
+}
+CrosswalkSeriesId GraphEditor::createCrosswalkSeries(Transaction& tx,
+                                                     NodeId at) {
     auto mut = graph_.createCrosswalkSeries(at);
-    tx.recordUndo(std::move(mut.undo), bus_.crosswalkSeriesRemoved,
-                  CrosswalkSeriesRemoved{mut.id, at});
-    tx.recordEvent(bus_.crosswalkSeriesCreated,
-                   CrosswalkSeriesCreated{mut.id, at});
-    onNodeStale(tx, at);
-    return mut.id;
+    const auto csid = mut.id;
+    return applyTx(tx, std::move(mut), bus_.crosswalkSeriesCreated,
+                   Created<CrosswalkSeriesId, NodeId>{.id = csid, .at = at},
+                   bus_.crosswalkSeriesRemoved,
+                   Removed<CrosswalkSeriesId, NodeId>{.id = csid, .at = at});
 }
-
-CrosswalkId GraphEditor::createCrosswalkTx(Transaction& tx,
-                                           CrosswalkSeriesId parent,
-                                           Line line) {
-    auto mut = graph_.createCrosswalk(parent, line);
-    NodeId nodeId = mut.at;
-    tx.recordUndo(std::move(mut.undo), bus_.crosswalkRemoved,
-                  CrosswalkRemoved{mut.id, nodeId});
-    tx.recordEvent(bus_.crosswalkCreated, CrosswalkCreated{mut.id, nodeId});
-    onNodeStale(tx, nodeId);
-    return mut.id;
+CrosswalkId GraphEditor::createCrosswalk(Transaction& tx,
+                                         CrosswalkSeriesId parent,
+                                         Line anchor) {
+    auto mut = graph_.createCrosswalk(parent, anchor);
+    const auto at = mut.at;
+    const auto cid = mut.id;
+    dirty_.nodeUpdated.publish(UpdatedTx<NodeId>{.id = at, .tx = tx});
+    return applyTx(tx, std::move(mut), bus_.crosswalkCreated,
+                   Created<CrosswalkId, NodeId>{.id = cid, .at = at},
+                   bus_.crosswalkRemoved,
+                   Removed<CrosswalkId, NodeId>{.id = cid, .at = at});
 }
+std::expected<std::vector<ClusterId>, MovementLayoutError>
+GraphEditor::setEntryLayout(Transaction& tx, EntryId id,
+                            std::vector<MovementSpec> specs,
+                            std::vector<bool> shared) {
+    if (auto v = validateLayout(id, specs, shared); !v)
+        return std::unexpected(v.error());
 
-void GraphEditor::setEntryLanesTx(Transaction& tx, EntryId at,
-                                  std::vector<EntryLaneSpec> specs) {
-    auto mut = graph_.setEntryLanes(at, std::move(specs));
-    NodeId nodeId = mut.at;
-    tx.recordUndo(std::move(mut.undo), bus_.entryLanesChanged,
-                  EntryLanesChanged{at, nodeId});
-    tx.recordEvent(bus_.entryLanesChanged, EntryLanesChanged{at, nodeId});
-    onNodeStale(tx, nodeId);
-}
+    clearEntryLayout(tx, id);
 
-void GraphEditor::setExitLanesTx(Transaction& tx, ExitId at,
-                                 std::vector<ExitLaneSpec> specs) {
-    auto mut = graph_.setExitLanes(at, std::move(specs));
-    NodeId nodeId = mut.at;
-    tx.recordUndo(std::move(mut.undo), bus_.exitLanesChanged,
-                  ExitLanesChanged{at, nodeId});
-    tx.recordEvent(bus_.exitLanesChanged, ExitLanesChanged{at, nodeId});
-    onNodeStale(tx, nodeId);
-}
+    std::vector<MovementId> backlog;
+    std::vector<ClusterId> clusters;
+    int laneCursor = 0;
+    int clFirst = 0;
+    for (size_t i = 0; i < specs.size(); ++i) {
+        auto mId = createMovement(tx, id, specs[i].exit, laneCursor,
+                                  specs[i].laneCount);
+        backlog.push_back(mId);
 
-//
-//  SETTERS TX
-//
-
-void GraphEditor::moveEntryTx(Transaction& tx, EntryId id, Position position,
-                              Vector2 heading) {
-    auto mutP = graph_.setEntryPosition(id, position);
-    NodeId nodeId = mutP.at;
-    tx.recordUndo(std::move(mutP.undo), bus_.entryMoved,
-                  EntryMoved{id, nodeId});
-    auto mutH = graph_.setEntryHeading(id, heading);
-    tx.recordUndoSilent(std::move(mutH.undo));
-    tx.recordEvent(bus_.entryMoved, EntryMoved{id, nodeId});
-
-    // movement polylines anchor at the entry — repaint them
-    for (MovementId m : graph_.data().entries().get(id)->movements()) {
-        tx.recordEvent(bus_.movementUpdated, MovementUpdated{m, nodeId});
-        tx.recordUndoEvent(bus_.movementUpdated, MovementUpdated{m, nodeId});
-    }
-    onNodeStale(tx, nodeId);
-}
-
-void GraphEditor::moveExitTx(Transaction& tx, ExitId id, Position position,
-                             Vector2 heading) {
-    auto mutP = graph_.setExitPosition(id, position);
-    NodeId nodeId = mutP.at;
-    tx.recordUndo(std::move(mutP.undo), bus_.exitMoved, ExitMoved{id, nodeId});
-    auto mutH = graph_.setExitHeading(id, heading);
-    tx.recordUndoSilent(std::move(mutH.undo));
-    tx.recordEvent(bus_.exitMoved, ExitMoved{id, nodeId});
-
-    // movement polylines end at the exit — repaint movements targeting it
-    const auto* node = graph_.data().nodes().get(nodeId);
-    for (EntryId eId : node->entries()) {
-        for (MovementId m : graph_.data().entries().get(eId)->movements()) {
-            if (graph_.data().movements().get(m)->to() != id) continue;
-            tx.recordEvent(bus_.movementUpdated, MovementUpdated{m, nodeId});
-            tx.recordUndoEvent(bus_.movementUpdated,
-                               MovementUpdated{m, nodeId});
+        laneCursor += specs[i].laneCount;
+        if (i < specs.size() - 1 && shared[i])
+            --laneCursor;
+        else {
+            auto cId =
+                createCluster(tx, id, backlog, clFirst, laneCursor - clFirst);
+            clusters.push_back(cId);
+            backlog.clear();
+            clFirst = laneCursor;
         }
     }
-    onNodeStale(tx, nodeId);
-}
-
-void GraphEditor::setEntrySpeedLimitTx(Transaction& tx, EntryId id,
-                                       float speedLimit) {
-    auto mut = graph_.setEntrySpeedLimit(id, speedLimit);
-    NodeId nodeId = mut.at;
-    tx.recordUndo(std::move(mut.undo), bus_.entrySpeedLimitChanged,
-                  EntrySpeedLimitChanged{id, nodeId});
-    tx.recordEvent(bus_.entrySpeedLimitChanged,
-                   EntrySpeedLimitChanged{id, nodeId});
-    onNodeStale(tx, nodeId);
-}
-
-void GraphEditor::setExitSpeedLimitTx(Transaction& tx, ExitId id,
-                                      float speedLimit) {
-    auto mut = graph_.setExitSpeedLimit(id, speedLimit);
-    NodeId nodeId = mut.at;
-    tx.recordUndo(std::move(mut.undo), bus_.exitSpeedLimitChanged,
-                  ExitSpeedLimitChanged{id, nodeId});
-    tx.recordEvent(bus_.exitSpeedLimitChanged,
-                   ExitSpeedLimitChanged{id, nodeId});
-    onNodeStale(tx, nodeId);
-}
-
-void GraphEditor::setCrosswalkSeriesWalkSpeedTx(Transaction& tx,
-                                                CrosswalkSeriesId id,
-                                                float speed) {
-    auto mut = graph_.setCrosswalkSeriesWalkSpeed(id, speed);
-    NodeId nodeId = mut.at;
-    tx.recordUndo(std::move(mut.undo), bus_.crosswalkSeriesWalkSpeedChanged,
-                  CrosswalkSeriesWalkSpeedChanged{id, nodeId});
-    tx.recordEvent(bus_.crosswalkSeriesWalkSpeedChanged,
-                   CrosswalkSeriesWalkSpeedChanged{id, nodeId});
-    onNodeStale(tx, nodeId);
+    const auto at = graph_.parentOf(id);
+    dirty_.nodeUpdated.publish(UpdatedTx<NodeId>{.id = at, .tx = tx});
+    return clusters;
 }
 
 std::expected<void, MovementLayoutError> GraphEditor::validateLayout(
-    EntryId id, const std::vector<MovementSpec>& specs,
+    EntryId id, const std::vector<GraphEditor::MovementSpec>& specs,
     const std::vector<bool>& shared) {
     const auto* e = graph_.data().entries().get(id);
 
-    if (!specs.empty()) {
-        if (specs.size() != shared.size() + 1)
-            return std::unexpected(MovementLayoutError::SpecSizeMismatch);
-        if (e->lanes().empty())
-            return std::unexpected(MovementLayoutError::EmptyLaneSet);
-        int specLanes = 0;
-        for (auto& s : specs) specLanes += s.laneCount;
+    auto specLanes = [&] {
+        int count = 0;
+        for (auto& s : specs) count += s.laneCount;
         for (auto s : shared)
-            if (s) --specLanes;
-        if (specLanes != static_cast<int>(e->lanes().size()))
-            return std::unexpected(MovementLayoutError::LaneCountMismatch);
+            if (s) --count;
+        return count;
+    };
 
-        if (!std::ranges::all_of(specs,
-                                 [&](auto& s) { return s.laneCount > 0; }))
-            assert(false &&
-                   "Movement layout validation : Movement with zero lanes");
+    assert(!specs.empty());
 
-        if (!std::ranges::all_of(specs, [&](auto& s) {
-                const auto* x = graph_.data().exits().get(s.exit);
-                return x && e->at() == x->at();
-            }))
-            assert(false &&
-                   "Movement layout validation : Exit from spec not in scope");
+    if (specs.size() != shared.size() + 1)
+        return std::unexpected(MovementLayoutError::SpecSizeMismatch);
 
-        auto angles =
-            specs | std::views::transform([&](auto& s) {
-                return graph_geometry::classifyAngle(graph_.data(), id, s.exit);
-            });
-        if (!std::ranges::is_sorted(angles, std::ranges::greater{}))
-            return std::unexpected(MovementLayoutError::AngularOrderViolation);
-    }
+    if (e->params().lanes.empty())
+        return std::unexpected(MovementLayoutError::EmptyLaneSet);
+
+    if (specLanes() != static_cast<int>(e->params().lanes.size()))
+        return std::unexpected(MovementLayoutError::LaneCountMismatch);
+
+    if (!std::ranges::all_of(specs, [&](auto& s) { return s.laneCount > 0; }))
+        assert(false && "Movement layout : Movement with zero lanes");
+
+    if (!std::ranges::all_of(specs, [&](auto& s) {
+            const auto* x = graph_.data().exits().get(s.exit);
+            return x && e->at() == x->at();
+        }))
+        assert(false && "Movement layout : Exit from spec not in scope");
+
+    // Movements are born with a 1:1 entry→exit lane split, so a movement can't
+    // claim more entry lanes than its exit has lanes without the geometry solve
+    // indexing a nonexistent exit lane.
+    if (!std::ranges::all_of(specs, [&](auto& s) {
+            const auto* x = graph_.data().exits().get(s.exit);
+            return x != nullptr &&
+                   s.laneCount <= static_cast<int>(x->params().lanes.size());
+        }))
+        return std::unexpected(MovementLayoutError::ExitLaneOverflow);
+
+    auto angles = specs | std::views::transform([&](auto& s) {
+                      return compute::classifyAngle(graph_.data(), id, s.exit);
+                  });
+    if (!std::ranges::is_sorted(angles, std::ranges::greater{}))
+        return std::unexpected(MovementLayoutError::AngularOrderViolation);
+
     return {};
 }
 
-std::expected<void, MovementSplitError> GraphEditor::validateSplits(
-    MovementId id, const std::vector<int>& splits) {
-    auto m = graph_.data().movements().get(id);
-    auto x = graph_.data().exits().get(m->to());
-    if (m->lanes().size() != splits.size())
-        return std::unexpected(MovementSplitError::LaneCountToSplitMismatch);
-    int xSizeExpected = 0;
-    for (auto val : splits) {
-        assert(val > 0 && "Movement layout validation : Zero split");
-        xSizeExpected += val;
-    }
-    if (static_cast<int>(x->lanes().size()) != xSizeExpected)
-        return std::unexpected(MovementSplitError::ExitLaneCountSplitMismatch);
-    return {};
-}
-
-// Validation and coordination with other domains performed by EditorContext
-std::vector<MovementId> GraphEditor::setEntryLayoutTx(
-    Transaction& tx, EntryId id, std::vector<GraphEditor::MovementSpec> specs,
-    std::vector<bool> shared) {
-    clearEntryLayoutTx(tx, id);
-
-    const auto* e = graph_.data().entries().get(id);
-
-    std::vector<MovementId> movementBacklog;
-    std::vector<MovementId> allMovements;
-    std::vector<EntryLaneId> laneBacklog;
-    size_t laneCursor = 0;
-    for (size_t i = 0; i < specs.size(); ++i) {
-        std::vector<EntryLaneId> movementLanes;
-        size_t specEnd = laneCursor + static_cast<size_t>(specs[i].laneCount);
-        while (laneCursor < specEnd) {
-            EntryLaneId next = e->lanes()[laneCursor];
-            movementLanes.push_back(next);
-            if (laneBacklog.empty() || laneBacklog.back() != next)
-                laneBacklog.push_back(next);
-            ++laneCursor;
-        }
-
-        auto defaultSplit = [&](MovementSpec& ms) -> std::vector<int> {
-            const auto* x = graph_.data().exits().get(ms.exit);
-            std::vector<int> result(ms.laneCount, 1);
-            result.back() = x->lanes().size() - ms.laneCount + 1;
-            return result;
-        };
-
-        MovementId newMovement =
-            createMovementTx(tx, id, specs[i].exit, std::move(movementLanes),
-                             defaultSplit(specs[i]));
-        movementBacklog.push_back(newMovement);
-        allMovements.push_back(newMovement);
-
-        if (i < specs.size() - 1 && shared[i]) {
-            --laneCursor;
-        } else {
-            createClusterTx(tx, id, movementBacklog, laneBacklog);
-            movementBacklog.clear();
-            laneBacklog.clear();
-        }
-    }
-    return allMovements;
-}
-
-std::expected<void, MovementSplitError> GraphEditor::setMovementSplitsTx(
-    Transaction& tx, MovementId id, std::vector<int> splits) {
-    auto err = validateSplits(id, splits);
-    if (!err) return std::unexpected(err.error());
-    auto mut = graph_.setMovementSplits(id, std::move(splits));
-    NodeId nodeId = mut.at;
-    tx.recordUndo(std::move(mut.undo), bus_.movementUpdated,
-                  MovementUpdated{id, nodeId});
-    tx.recordEvent(bus_.movementUpdated, MovementUpdated{id, nodeId});
-    onNodeStale(tx, nodeId);
-    return {};
-}
-
-void GraphEditor::setMovementPathSpecTx(Transaction& tx, MovementId id,
-                                        MovementPathSpec spec) {
-    auto mut = graph_.setMovementPathSpec(id, spec);
-    NodeId nodeId = mut.at;
-    tx.recordUndo(std::move(mut.undo), bus_.movementUpdated,
-                  MovementUpdated{id, nodeId});
-    tx.recordEvent(bus_.movementUpdated, MovementUpdated{id, nodeId});
-    onNodeStale(tx, nodeId);
-}
-
-void GraphEditor::setMovementTypeTx(Transaction& tx, MovementId id,
-                                    MovementType type) {
-    auto mut = graph_.setMovementType(id, type);
-    NodeId nodeId = mut.at;
-    tx.recordUndo(std::move(mut.undo), bus_.movementUpdated,
-                  MovementUpdated{id, nodeId});
-    tx.recordEvent(bus_.movementUpdated, MovementUpdated{id, nodeId});
-    onNodeStale(tx, nodeId);
-}
-
-void GraphEditor::setCrosswalkSeriesPedPathTx(Transaction& tx,
-                                              CrosswalkSeriesId id,
-                                              Polyline path) {
-    auto mut = graph_.setCrosswalkSeriesPedestrianPath(id, std::move(path));
-    NodeId nodeId = mut.at;
-    tx.recordUndo(std::move(mut.undo), bus_.crosswalkSeriesUpdated,
-                  CrosswalkSeriesUpdated{id, nodeId});
-    tx.recordEvent(bus_.crosswalkSeriesUpdated,
-                   CrosswalkSeriesUpdated{id, nodeId});
-    onNodeStale(tx, nodeId);
-}
-
-void GraphEditor::setCrosswalkTypeTx(Transaction& tx, CrosswalkId id,
-                                     CrosswalkType type) {
-    auto mut = graph_.setCrosswalkType(id, type);
-    NodeId nodeId = mut.at;
-    tx.recordUndo(std::move(mut.undo), bus_.crosswalkUpdated,
-                  CrosswalkUpdated{id, nodeId});
-    tx.recordEvent(bus_.crosswalkUpdated, CrosswalkUpdated{id, nodeId});
-    onNodeStale(tx, nodeId);
-}
-
-void GraphEditor::setCrosswalkLineTx(Transaction& tx, CrosswalkId id,
-                                     Line line) {
-    auto mut = graph_.setCrosswalkLine(id, line);
-    NodeId nodeId = mut.at;
-    tx.recordUndo(std::move(mut.undo), bus_.crosswalkUpdated,
-                  CrosswalkUpdated{id, nodeId});
-    tx.recordEvent(bus_.crosswalkUpdated, CrosswalkUpdated{id, nodeId});
-    onNodeStale(tx, nodeId);
-}
-
-void GraphEditor::setCrosswalkEdgeTx(Transaction& tx, CrosswalkId id,
-                                     Crosswalk::SegmentParams edge) {
-    auto mut = graph_.setCrosswalkEdge(id, edge);
-    NodeId nodeId = mut.at;
-    tx.recordUndo(std::move(mut.undo), bus_.crosswalkUpdated,
-                  CrosswalkUpdated{id, nodeId});
-    tx.recordEvent(bus_.crosswalkUpdated, CrosswalkUpdated{id, nodeId});
-    onNodeStale(tx, nodeId);
-}
-
-void GraphEditor::setCrosswalkSplitTx(Transaction& tx, CrosswalkId id,
-                                      Crosswalk::SegmentParams split) {
-    auto mut = graph_.setCrosswalkSplit(id, split);
-    NodeId nodeId = mut.at;
-    tx.recordUndo(std::move(mut.undo), bus_.crosswalkUpdated,
-                  CrosswalkUpdated{id, nodeId});
-    tx.recordEvent(bus_.crosswalkUpdated, CrosswalkUpdated{id, nodeId});
-    onNodeStale(tx, nodeId);
-}
-
-//
-//  REMOVE TX
-//
-
-void GraphEditor::removeNodeTx(Transaction& tx, NodeId id) {
-    const Node* node = graph_.data().nodes().get(id);
-
-    for (CrosswalkSeriesId csid : node->crosswalkSeries()) {
-        removeCrosswalkSeriesTx(tx, csid);
-    }
-
-    for (EntryId eid : node->entries()) {
-        removeEntryTx(tx, eid);
-    }
-
-    for (ExitId xid : node->exits()) {
-        removeExitTx(tx, xid);
-    }
+// removal
+void GraphEditor::removeNode(Transaction& tx, NodeId id) {
+    const auto* n = graph_.data().nodes().get(id);
+    auto csCopy = n->crosswalkSeries();
+    auto eCopy = n->entries();
+    auto xCopy = n->exits();
+    for (auto csid : csCopy) removeCrosswalkSeries(tx, csid);
+    for (auto eid : eCopy) removeEntry(tx, eid);
+    for (auto xid : xCopy) removeExit(tx, xid);
 
     auto mut = graph_.removeNode(id);
-    tx.recordUndo(std::move(mut.undo), bus_.nodeCreated, NodeCreated{id});
-    tx.recordEvent(bus_.nodeRemoved, NodeRemoved{id});
-    onNodeStale(tx, id);
+    dirty_.nodeRemoved.publish(RemovedTx<NodeId>{.id = id, .tx = tx});
+    applyTx(tx, std::move(mut), bus_.nodeRemoved, Removed<NodeId>{id},
+            bus_.nodeCreated, Created<NodeId>{id});
 }
+void GraphEditor::removeEntry(Transaction& tx, EntryId id) {
+    clearEntryLayout(tx, id);
 
-void GraphEditor::removeCrosswalkSeriesTx(Transaction& tx,
-                                          CrosswalkSeriesId id) {
-    auto cs = graph_.data().crosswalkSeries().get(id);
-    for (CrosswalkId cid : cs->crosswalks()) {
-        removeCrosswalkTx(tx, cid);
-    }
-    auto mut = graph_.removeCrosswalkSeries(id);
-    NodeId nodeId = mut.id;
-    tx.recordUndo(std::move(mut.undo), bus_.crosswalkSeriesCreated,
-                  CrosswalkSeriesCreated{id, nodeId});
-    tx.recordEvent(bus_.crosswalkSeriesRemoved,
-                   CrosswalkSeriesRemoved{id, nodeId});
-    onNodeStale(tx, nodeId);
-}
-
-void GraphEditor::removeCrosswalkTx(Transaction& tx, CrosswalkId id) {
-    auto mut = graph_.removeCrosswalk(id);
-    NodeId nodeId = mut.id;
-    tx.recordUndo(std::move(mut.undo), bus_.crosswalkCreated,
-                  CrosswalkCreated{id, nodeId});
-    tx.recordEvent(bus_.crosswalkRemoved, CrosswalkRemoved{id, nodeId});
-    onNodeStale(tx, nodeId);
-}
-
-void GraphEditor::removeEntryTx(Transaction& tx, EntryId id) {
-    if (auto* e = graph_.data().entries().get(id)) {
-        for (MovementId mid : e->movements()) {
-            removeMovementTx(tx, mid);
-        }
-        setEntryLanesTx(tx, id, {});
-    }
     auto mut = graph_.removeEntry(id);
-    NodeId nodeId = mut.id;
-    tx.recordUndo(std::move(mut.undo), bus_.entryCreated,
-                  EntryCreated{id, nodeId});
-    tx.recordEvent(bus_.entryRemoved, EntryRemoved{id, nodeId});
-    onNodeStale(tx, nodeId);
+    const auto at = mut.at;
+    dirty_.entryRemoved.publish(
+        RemovedTx<EntryId, NodeId>{.id = id, .at = at, .tx = tx});
+    applyTx(tx, std::move(mut), bus_.entryRemoved,
+            Removed<EntryId, NodeId>{.id = id, .at = at}, bus_.entryCreated,
+            Created<EntryId, NodeId>{.id = id, .at = at});
 }
-
-void GraphEditor::removeExitTx(Transaction& tx, ExitId id) {
-    if (graph_.data().exits().get(id)) {
-        setExitLanesTx(tx, id, {});
-    }
+void GraphEditor::removeExit(Transaction& tx, ExitId id) {
+    for (auto eid : entriesFeedingExit(id)) clearEntryLayout(tx, eid);
 
     auto mut = graph_.removeExit(id);
-    NodeId nodeId = mut.id;
-    tx.recordUndo(std::move(mut.undo), bus_.exitCreated,
-                  ExitCreated{id, nodeId});
-    tx.recordEvent(bus_.exitRemoved, ExitRemoved{id, nodeId});
-    onNodeStale(tx, nodeId);
+    const auto at = mut.at;
+    applyTx(tx, std::move(mut), bus_.exitRemoved,
+            Removed<ExitId, NodeId>{.id = id, .at = at}, bus_.exitCreated,
+            Created<ExitId, NodeId>{.id = id, .at = at});
+}
+void GraphEditor::removeCrosswalk(Transaction& tx, CrosswalkId id) {
+    auto mut = graph_.removeCrosswalk(id);
+    const auto at = mut.at;
+    dirty_.nodeUpdated.publish(UpdatedTx<NodeId>{.id = at, .tx = tx});
+    dirty_.crosswalkRemoved.publish(
+        RemovedTx<CrosswalkId, NodeId>{.id = id, .at = at, .tx = tx});
+    applyTx(tx, std::move(mut), bus_.crosswalkRemoved,
+            Removed<CrosswalkId, NodeId>{.id = id, .at = at},
+            bus_.crosswalkCreated,
+            Created<CrosswalkId, NodeId>{.id = id, .at = at});
+}
+void GraphEditor::removeCrosswalkSeries(Transaction& tx, CrosswalkSeriesId id) {
+    const auto* cs = graph_.data().crosswalkSeries().get(id);
+    auto cwCopy = cs->crosswalks();
+    for (auto cid : cwCopy) removeCrosswalk(tx, cid);
+
+    auto mut = graph_.removeCrosswalkSeries(id);
+    const auto at = mut.at;
+    applyTx(tx, std::move(mut), bus_.crosswalkSeriesRemoved,
+            Removed<CrosswalkSeriesId, NodeId>{.id = id, .at = at},
+            bus_.crosswalkSeriesCreated,
+            Created<CrosswalkSeriesId, NodeId>{.id = id, .at = at});
+}
+void GraphEditor::clearEntryLayout(Transaction& tx, EntryId id) {
+    const auto* e = graph_.data().entries().get(id);
+    auto clCopy = e->clusters();
+    auto mCopy = e->movements();
+    for (auto cid : clCopy) removeCluster(tx, cid);
+    for (auto mid : mCopy) removeMovement(tx, mid);
+    const auto node = e->at();
+    dirty_.nodeUpdated.publish(UpdatedTx<NodeId>{.id = node, .tx = tx});
 }
 
-void GraphEditor::clearEntryLayoutTx(Transaction& tx, EntryId id) {
-    auto* e = graph_.data().entries().get(id);
-    auto clustersCopy = e->clusters();
-    auto movementsCopy = e->movements();
-    for (auto cId : clustersCopy) removeClusterTx(tx, cId);
-    for (auto mId : movementsCopy) removeMovementTx(tx, mId);
+// override handling
+void GraphEditor::setPermittedOverride(Transaction& tx, NodeId node, StreamId a,
+                                       StreamId b, bool permitted) {
+    auto mut = graph_.setPermittedOverride(node, a, b, permitted);
+    dirty_.nodeUpdated.publish(UpdatedTx<NodeId>{.id = node, .tx = tx});
+    applyTxUpdate(tx, std::move(mut), bus_.streamPermittedOverrideSet,
+                  Set<StreamPermittedOverrideTag, NodeId>{.at = node});
 }
-
-//
-//  PRIVATE TX
-//
-
-MovementId GraphEditor::createMovementTx(Transaction& tx, EntryId from,
-                                         ExitId to,
-                                         std::vector<EntryLaneId> lanes,
-                                         std::vector<int> split) {
+void GraphEditor::clearPermittedOverride(Transaction& tx, NodeId node,
+                                         StreamId a, StreamId b) {
+    auto mut = graph_.clearPermittedOverride(node, a, b);
+    dirty_.nodeUpdated.publish(UpdatedTx<NodeId>{.id = node, .tx = tx});
+    applyTxUpdate(tx, std::move(mut), bus_.streamPermittedOverrideCleared,
+                  Cleared<StreamPermittedOverrideTag, NodeId>{.at = node});
+}
+void GraphEditor::setIntergreenOverride(Transaction& tx, NodeId node,
+                                        StreamId evac, StreamId appr,
+                                        int t_maxEvAp, int t_maxApEv) {
     auto mut =
-        graph_.createMovement(from, to, std::move(lanes), std::move(split));
-    NodeId nodeId = mut.at;
-    tx.recordUndo(std::move(mut.undo), bus_.movementRemoved,
-                  MovementRemoved{mut.id, nodeId});
-    tx.recordEvent(bus_.movementCreated, MovementCreated{mut.id, nodeId});
-    onNodeStale(tx, nodeId);
-    return mut.id;
+        graph_.setIntergreenOverride(node, evac, appr, t_maxEvAp, t_maxApEv);
+    dirty_.nodeUpdated.publish(UpdatedTx<NodeId>{.id = node, .tx = tx});
+    applyTxUpdate(tx, std::move(mut), bus_.streamIntergreenOverrideSet,
+                  Set<StreamIntergreenOverrideTag, NodeId>{.at = node});
+}
+void GraphEditor::clearIntergreenOverride(Transaction& tx, NodeId node,
+                                          StreamId evac, StreamId appr) {
+    auto mut = graph_.clearIntergreenOverride(node, evac, appr);
+    dirty_.nodeUpdated.publish(UpdatedTx<NodeId>{.id = node, .tx = tx});
+    applyTxUpdate(tx, std::move(mut), bus_.streamIntergreenOverrideCleared,
+                  Cleared<StreamIntergreenOverrideTag, NodeId>{.at = node});
 }
 
-void GraphEditor::removeMovementTx(Transaction& tx, MovementId id) {
+// setters
+void GraphEditor::setEntryLanes(Transaction& tx, EntryId id,
+                                std::vector<EntryLaneSpec> spec) {
+    auto* e = graph_.data().entries().get(id);
+    if (spec.size() != e->params().lanes.size()) clearEntryLayout(tx, id);
+
+    auto params = e->params();
+    params.lanes = std::move(spec);
+
+    auto mut = graph_.setParams(id, params);
+    const auto at = mut.at;
+    dirty_.nodeUpdated.publish(UpdatedTx<NodeId>{.id = at, .tx = tx});
+    applyTxUpdate(tx, std::move(mut), bus_.entryUpdated,
+                  Updated<EntryId, NodeId>{.id = id, .at = at});
+}
+void GraphEditor::setExitLanes(Transaction& tx, ExitId id,
+                               std::vector<double> spec) {
+    auto* x = graph_.data().exits().get(id);
+    if (spec.size() != x->params().lanes.size())
+        for (auto eid : entriesFeedingExit(id)) clearEntryLayout(tx, eid);
+
+    auto params = x->params();
+    params.lanes = std::move(spec);
+
+    auto mut = graph_.setParams(id, params);
+    const auto at = mut.at;
+    dirty_.nodeUpdated.publish(UpdatedTx<NodeId>{.id = at, .tx = tx});
+    applyTxUpdate(tx, std::move(mut), bus_.exitUpdated,
+                  Updated<ExitId, NodeId>{.id = id, .at = at});
+}
+
+void GraphEditor::moveEntry(Transaction& tx, EntryId id, Position position,
+                            Vector2 heading) {
+    auto* e = graph_.data().entries().get(id);
+
+    auto params = e->params();
+    params.position = position;
+    params.heading = heading;
+
+    auto mut = graph_.setParams(id, params);
+    const auto at = mut.at;
+    dirty_.nodeUpdated.publish(UpdatedTx<NodeId>{.id = at, .tx = tx});
+    applyTxUpdate(tx, std::move(mut), bus_.entryUpdated,
+                  Updated<EntryId, NodeId>{.id = id, .at = at});
+}
+void GraphEditor::moveExit(Transaction& tx, ExitId id, Position position,
+                           Vector2 heading) {
+    auto* x = graph_.data().exits().get(id);
+
+    auto params = x->params();
+    params.position = position;
+    params.heading = heading;
+
+    auto mut = graph_.setParams(id, params);
+    const auto at = mut.at;
+    dirty_.nodeUpdated.publish(UpdatedTx<NodeId>{.id = at, .tx = tx});
+    applyTxUpdate(tx, std::move(mut), bus_.exitUpdated,
+                  Updated<ExitId, NodeId>{.id = id, .at = at});
+}
+
+void GraphEditor::setEntrySpeedLimit(Transaction& tx, EntryId id,
+                                     double speedLimit) {
+    auto* e = graph_.data().entries().get(id);
+    assert(speedLimit > 0 && "speed limit has to be positive");
+
+    auto params = e->params();
+    params.speedLimit = speedLimit;
+
+    auto mut = graph_.setParams(id, params);
+    const auto at = mut.at;
+    dirty_.nodeUpdated.publish(UpdatedTx<NodeId>{.id = at, .tx = tx});
+    applyTxUpdate(tx, std::move(mut), bus_.entryUpdated,
+                  Updated<EntryId, NodeId>{.id = id, .at = at});
+}
+void GraphEditor::setExitSpeedLimit(Transaction& tx, ExitId id,
+                                    double speedLimit) {
+    auto* x = graph_.data().exits().get(id);
+    assert(speedLimit > 0 && "speed limit has to be positive");
+
+    auto params = x->params();
+    params.speedLimit = speedLimit;
+
+    auto mut = graph_.setParams(id, params);
+    const auto at = mut.at;
+    dirty_.nodeUpdated.publish(UpdatedTx<NodeId>{.id = at, .tx = tx});
+    applyTxUpdate(tx, std::move(mut), bus_.exitUpdated,
+                  Updated<ExitId, NodeId>{.id = id, .at = at});
+}
+
+void GraphEditor::setMovementPathSpec(Transaction& tx, MovementId id,
+                                      MovementPathSpec pathSpec) {
+    auto* m = graph_.data().movements().get(id);
+    assert(pathSpec.dE > -1e-9 && pathSpec.dX > -1e-9 &&
+           "offsets have to be positive");
+
+    auto params = m->params();
+    params.pathSpec = pathSpec;
+
+    auto mut = graph_.setParams(id, params);
+    const auto at = mut.at;
+    dirty_.nodeUpdated.publish(UpdatedTx<NodeId>{.id = at, .tx = tx});
+    applyTxUpdate(tx, std::move(mut), bus_.movementUpdated,
+                  Updated<MovementId, NodeId>{.id = id, .at = at});
+}
+void GraphEditor::setMovementType(Transaction& tx, MovementId id,
+                                  MovementType type) {
+    auto* m = graph_.data().movements().get(id);
+
+    auto params = m->params();
+    params.type = type;
+
+    auto mut = graph_.setParams(id, params);
+    const auto at = mut.at;
+    dirty_.nodeUpdated.publish(UpdatedTx<NodeId>{.id = at, .tx = tx});
+    applyTxUpdate(tx, std::move(mut), bus_.movementUpdated,
+                  Updated<MovementId, NodeId>{.id = id, .at = at});
+}
+void GraphEditor::setMovementSplitPerLane(Transaction& tx, MovementId id,
+                                          std::vector<int> splitPerLane) {
+    auto* m = graph_.data().movements().get(id);
+    assert(m->lanes().laneCount == splitPerLane.size());
+
+    auto xCount = graph_.data().exits().get(m->to())->params().lanes.size();
+    int splitCount = 0;
+    for (int split : splitPerLane) splitCount += split;
+    assert(xCount == splitCount);
+
+    auto params = m->params();
+    params.splitPerLane = std::move(splitPerLane);
+
+    auto mut = graph_.setParams(id, params);
+    const auto at = mut.at;
+    dirty_.nodeUpdated.publish(UpdatedTx<NodeId>{.id = at, .tx = tx});
+    applyTxUpdate(tx, std::move(mut), bus_.movementUpdated,
+                  Updated<MovementId, NodeId>{.id = id, .at = at});
+}
+
+void GraphEditor::setCSeriesCriticalPath(Transaction& tx, CrosswalkSeriesId id,
+                                         Polyline path) {
+    auto* cs = graph_.data().crosswalkSeries().get(id);
+
+    auto params = cs->params();
+    params.criticalGreenPath = std::move(path);
+
+    auto mut = graph_.setParams(id, params);
+    const auto at = mut.at;
+    dirty_.nodeUpdated.publish(UpdatedTx<NodeId>{.id = at, .tx = tx});
+    applyTxUpdate(tx, std::move(mut), bus_.crosswalkSeriesUpdated,
+                  Updated<CrosswalkSeriesId, NodeId>{.id = id, .at = at});
+}
+void GraphEditor::setCSeriesCriticalSpeed(Transaction& tx, CrosswalkSeriesId id,
+                                          double speed) {
+    auto* cs = graph_.data().crosswalkSeries().get(id);
+    assert(speed > 0 && "walk speed must be positive");
+
+    auto params = cs->params();
+    params.criticalGreenSpeedOverride = speed;
+
+    auto mut = graph_.setParams(id, params);
+    const auto at = mut.at;
+    dirty_.nodeUpdated.publish(UpdatedTx<NodeId>{.id = at, .tx = tx});
+    applyTxUpdate(tx, std::move(mut), bus_.crosswalkSeriesUpdated,
+                  Updated<CrosswalkSeriesId, NodeId>{.id = id, .at = at});
+}
+
+void GraphEditor::setCSeriesType(Transaction& tx, CrosswalkSeriesId id,
+                                 CrosswalkType type) {
+    auto* cs = graph_.data().crosswalkSeries().get(id);
+
+    auto params = cs->params();
+    params.type = type;
+
+    auto resizeCrosswalkToMatchType = [&](CrosswalkId id) {
+        bool needsResize =
+            (cs->params().type == CrosswalkType::PEDESTRIAN_AND_CYCLIST ||
+             type == CrosswalkType::PEDESTRIAN_AND_CYCLIST) &&
+            (cs->params().type != type);
+        if (!needsResize) return;
+        auto cinput = graph_.data().crosswalks().get(id)->params().input;
+        if (type == CrosswalkType::PEDESTRIAN_AND_CYCLIST)
+            cinput.split.width /= 2.0;
+        else
+            cinput.split.width = cinput.edge.width;
+
+        setCrosswalkGeometry(tx, id, cinput);
+    };
+
+    for (auto cid : cs->crosswalks()) resizeCrosswalkToMatchType(cid);
+
+    auto mut = graph_.setParams(id, params);
+    const auto at = mut.at;
+    dirty_.nodeUpdated.publish(UpdatedTx<NodeId>{.id = at, .tx = tx});
+    applyTxUpdate(tx, std::move(mut), bus_.crosswalkSeriesUpdated,
+                  Updated<CrosswalkSeriesId, NodeId>{.id = id, .at = at});
+}
+
+void GraphEditor::setCrosswalkGeometry(Transaction& tx, CrosswalkId id,
+                                       CrosswalkGeometryInput geometry) {
+    auto* cw = graph_.data().crosswalks().get(id);
+    auto cType =
+        graph_.data().crosswalkSeries().get(cw->parent())->params().type;
+    assert(cType == CrosswalkType::PEDESTRIAN_AND_CYCLIST
+               ? geometry.split.width != geometry.edge.width
+               : geometry.split.width == geometry.edge.width);
+
+    auto params = cw->params();
+    params.input = geometry;
+
+    auto mut = graph_.setParams(id, params);
+    const auto at = mut.at;
+    dirty_.nodeUpdated.publish(UpdatedTx<NodeId>{.id = at, .tx = tx});
+    applyTxUpdate(tx, std::move(mut), bus_.crosswalkUpdated,
+                  Updated<CrosswalkId, NodeId>{.id = id, .at = at});
+}
+
+void GraphEditor::registerSolve(Transaction& tx) {
+    reNodes_.clear();
+    tx.addSolve(SolvePriority::GRAPH, {.rederive = [this] { rederive(); },
+                                       .flush = [this] { flush(); }});
+}
+
+void GraphEditor::rederive() {
+    auto r = graph_.solve();
+    reNodes_.insert(r.nodes.begin(), r.nodes.end());
+}
+
+void GraphEditor::flush() {
+    for (auto id : reNodes_)
+        if (graph_.data().nodes().alive(id))
+            bus_.nodeUpdated.publish(Updated<NodeId>{id});
+
+    reNodes_.clear();
+}
+
+// private
+MovementId GraphEditor::createMovement(Transaction& tx, EntryId from, ExitId to,
+                                       int firstIdx, int laneCount) {
+    auto mut = graph_.createMovement(
+        from, to, {.at = from, .firstIdx = firstIdx, .laneCount = laneCount});
+    const auto at = mut.at;
+    const auto id = mut.id;
+
+    applyTx(tx, std::move(mut), bus_.movementCreated,
+            Created<MovementId, NodeId>{.id = id, .at = at},
+            bus_.movementRemoved,
+            Removed<MovementId, NodeId>{.id = id, .at = at});
+    dirty_.movementCreated.publish(
+        CreatedTx<MovementId, NodeId>{.id = id, .at = at, .tx = tx});
+    return id;
+}
+ClusterId GraphEditor::createCluster(Transaction& tx, EntryId at,
+                                     std::vector<MovementId> movements,
+                                     int firstIdx, int laneCount) {
+    auto mut = graph_.createCluster(
+        at, std::move(movements),
+        {.at = at, .firstIdx = firstIdx, .laneCount = laneCount});
+    const auto nid = mut.at;
+    const auto cid = mut.id;
+    return applyTx(tx, std::move(mut), bus_.clusterCreated,
+                   Created<ClusterId, NodeId>{.id = cid, .at = nid},
+                   bus_.clusterRemoved,
+                   Removed<ClusterId, NodeId>{.id = cid, .at = nid});
+}
+
+void GraphEditor::removeMovement(Transaction& tx, MovementId id) {
     auto mut = graph_.removeMovement(id);
-    NodeId nodeId = mut.id;
-    tx.recordUndo(std::move(mut.undo), bus_.movementCreated,
-                  MovementCreated{id, nodeId});
-    tx.recordEvent(bus_.movementRemoved, MovementRemoved{id, nodeId});
-    onNodeStale(tx, nodeId);
+    const auto at = mut.at;
+    dirty_.movementRemoved.publish(
+        RemovedTx<MovementId, NodeId>{.id = id, .at = at, .tx = tx});
+    applyTx(tx, std::move(mut), bus_.movementRemoved,
+            Removed<MovementId, NodeId>{.id = id, .at = at},
+            bus_.movementCreated,
+            Created<MovementId, NodeId>{.id = id, .at = at});
 }
 
-ClusterId GraphEditor::createClusterTx(Transaction& tx, EntryId at,
-                                       std::vector<MovementId> movements,
-                                       std::vector<EntryLaneId> lanes) {
-    auto mut = graph_.createCluster(at, std::move(movements), std::move(lanes));
-    NodeId nodeId = mut.at;
-    tx.recordUndo(std::move(mut.undo), bus_.clusterRemoved,
-                  ClusterRemoved{mut.id, nodeId});
-    tx.recordEvent(bus_.clusterCreated, ClusterCreated{mut.id, nodeId});
-    onNodeStale(tx, nodeId);
-    return mut.id;
-}
-
-void GraphEditor::removeClusterTx(Transaction& tx, ClusterId id) {
+void GraphEditor::removeCluster(Transaction& tx, ClusterId id) {
     auto mut = graph_.removeCluster(id);
-    NodeId nodeId = mut.id;
-    tx.recordUndo(std::move(mut.undo), bus_.clusterCreated,
-                  ClusterCreated{id, nodeId});
-    tx.recordEvent(bus_.clusterRemoved, ClusterRemoved{id, nodeId});
-    onNodeStale(tx, nodeId);
+    const auto at = mut.at;
+    applyTx(tx, std::move(mut), bus_.clusterRemoved,
+            Removed<ClusterId, NodeId>{.id = id, .at = at}, bus_.clusterCreated,
+            Created<ClusterId, NodeId>{.id = id, .at = at});
 }
 
-void GraphEditor::setStreamIntergreenOverrideTx(Transaction& tx, NodeId node,
-                                                StreamId evac, StreamId appr,
-                                                int t_maxEvAp, int t_maxApEv) {
-    auto mut = graph_.setStreamIntergreenOverride(node, evac, appr, t_maxEvAp,
-                                                  t_maxApEv);
-    tx.recordUndo(std::move(mut.undo), bus_.streamIntergreenOverrideChanged,
-                  StreamIntergreenOverrideChanged{node});
-    tx.recordEvent(bus_.streamIntergreenOverrideChanged,
-                   StreamIntergreenOverrideChanged{node});
-    onNodeStale(tx, node);
-}
-
-void GraphEditor::eraseStreamIntergreenOverrideTx(Transaction& tx, NodeId node,
-                                                  StreamId evac,
-                                                  StreamId appr) {
-    auto mut = graph_.eraseStreamIntergreenOverride(node, evac, appr);
-    tx.recordUndo(std::move(mut.undo), bus_.streamIntergreenOverrideChanged,
-                  StreamIntergreenOverrideChanged{node});
-    tx.recordEvent(bus_.streamIntergreenOverrideErased,
-                   StreamIntergreenOverrideErased{node});
-    onNodeStale(tx, node);
-}
-
-void GraphEditor::setStreamPermittedOverrideTx(Transaction& tx, NodeId node,
-                                               StreamId evac, StreamId appr,
-                                               bool permitted) {
-    auto mut = graph_.setStreamPermittedOverride(node, evac, appr, permitted);
-    tx.recordUndo(std::move(mut.undo), bus_.streamPermittedOverrideChanged,
-                  StreamPermittedOverrideChanged{node});
-    tx.recordEvent(bus_.streamPermittedOverrideChanged,
-                   StreamPermittedOverrideChanged{node});
-    onNodeStale(tx, node);
-}
-
-void GraphEditor::eraseStreamPermittedOverrideTx(Transaction& tx, NodeId node,
-                                                 StreamId evac, StreamId appr) {
-    auto mut = graph_.eraseStreamPermittedOverride(node, evac, appr);
-    tx.recordUndo(std::move(mut.undo), bus_.streamPermittedOverrideChanged,
-                  StreamPermittedOverrideChanged{node});
-    tx.recordEvent(bus_.streamPermittedOverrideErased,
-                   StreamPermittedOverrideErased{node});
-    onNodeStale(tx, node);
-}
-
-void GraphEditor::onNodeStale(Transaction& tx, NodeId id) {
-    tx.recordEvent(bus_.nodeRederived, NodeRederived{id});
-    tx.recordUndoEvent(bus_.nodeRederived, NodeRederived{id});
-    tx.addSolve(SolvePriority::GRAPH, [this] { graph_.solve(); });
+std::vector<EntryId> GraphEditor::entriesFeedingExit(ExitId exit) {
+    const auto* x = graph_.data().exits().get(exit);
+    const auto* n = graph_.data().nodes().get(x->at());
+    std::vector<EntryId> result;
+    for (auto eid : n->entries()) {
+        const auto* e = graph_.data().entries().get(eid);
+        bool feeds = std::ranges::any_of(e->movements(), [&](MovementId mid) {
+            return graph_.data().movements().get(mid)->to() == exit;
+        });
+        if (feeds) result.push_back(eid);
+    }
+    return result;
 }

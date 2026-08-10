@@ -3,32 +3,42 @@
 #include <road_network/demand/data/flow.hpp>
 #include <road_network/demand/data/saturation_override.hpp>
 #include <road_network/util/ids.hpp>
+#include <unordered_set>
 
-class Transaction;
+#include "bus/dirty_event_bus.hpp"
+#include "bus/impl/dirty_events.hpp"
+#include "bus/subscription_bag.hpp"
+
 class Demand;
 class NetworkEventBus;
-class GraphData;
+class Graph;
+class Transaction;
 
 class DemandEditor {
    public:
-    DemandEditor(Demand& demand, const GraphData& graph, NetworkEventBus& bus)
-        : demand_(demand), graph_(graph), bus_(bus) {}
+    DemandEditor(Demand& demand, const Graph& graph, NetworkEventBus& bus,
+                 DirtyEventBus& dirty);
 
-    void onMovementCreatedTx(Transaction& tx, MovementId id);
-    void onMovementRemovedTx(Transaction& tx, MovementId id);
+    void setFlow(Transaction& tx, MovementId mov, NodeId at, Flow flow);
+    void clearFlow(Transaction& tx, MovementId mov, NodeId at);
+    void setSaturationOverride(Transaction& tx, MovementId mov, NodeId at,
+                               SaturationOverride value);
+    void clearSaturationOverride(Transaction& tx, MovementId mov, NodeId at);
 
-    void setFlowTx(Transaction& tx, MovementId at, Flow flow);
-    void eraseFlowTx(Transaction& tx, MovementId at);
-    void setSaturationOverrideTx(Transaction& tx, MovementId at,
-                                 SaturationOverride override);
-    void eraseSaturationOverrideTx(Transaction& tx, MovementId at);
+    void registerSolve(Transaction& tx);
+    void rederive();
+    void flush();
 
    private:
     Demand& demand_;
-    const GraphData& graph_;
+    const Graph& graph_;
     NetworkEventBus& bus_;
+    DirtyEventBus& dirty_;
+    SubscriptionBag subs_;
 
-    // schedules the deferred demand solve and publishes DemandRederived for
-    // the movement's entry and its opposing entry (mirror of onNodeStale)
-    void onDemandStale(Transaction& tx, MovementId at);
+    std::unordered_set<EntryId> reEntries_;
+
+    void onMovementCreated(CreatedTx<MovementId, NodeId>);
+    void onMovementRemoved(RemovedTx<MovementId, NodeId>);
+    void onEntryRemoved(RemovedTx<EntryId, NodeId>);
 };

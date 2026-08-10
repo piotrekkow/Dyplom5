@@ -1,7 +1,5 @@
 #pragma once
 
-#include <unordered_map>
-
 #include "conflict_point.hpp"
 #include "road_network/util/ids.hpp"
 

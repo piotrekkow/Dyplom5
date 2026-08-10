@@ -1,6 +1,7 @@
 #pragma once
 
-#include "road_network/util/geometry/position.hpp"
+#include <geometry/position.hpp>
+
 #include "road_network/util/ids.hpp"
 
 class Node {

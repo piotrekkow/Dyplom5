@@ -1,176 +1,160 @@
 #include "road_network/control.hpp"
 
-#include <algorithm>
-#include <cassert>
-#include <variant>
-
+#include "control/timing.hpp"
+#include "control/validation.hpp"
 #include "derived/control_compute.hpp"
-#include "road_network/control/data/sequence.hpp"
-#include "road_network/signal/signal_data.hpp"
+#include "road_network/control/control_derived.hpp"
+#include "road_network/graph.hpp"
+#include "road_network/signal.hpp"
+#include "road_network/util/compute_helpers.hpp"
 
 namespace {
-
-void registerTiming(ControlData& data, SignalConfigId configId, TimingId id) {
-    if (!data.configControls().get(configId))
-        data.configControls().set(configId, {});
-    data.configControls().get(configId)->timings.push_back(id);
+bool emptied(const NodeControl& nc) {
+    return nc.stages.empty() && nc.timings.empty() && nc.transitions.empty();
 }
-
-void unregisterTiming(ControlData& data, SignalConfigId configId, TimingId id) {
-    if (auto* cc = data.configControls().get(configId)) {
-        auto& ts = cc->timings;
-        ts.erase(std::ranges::find(ts, id));
-    }
-}
-
 }  // namespace
 
-//
-//  TIMING LIFECYCLE
-//
+NodeId Control::parentOf(TimingId id) const {
+    return data_.timings().get(id)->at();
+}
+NodeId Control::parentOf(StageId id) const {
+    return data_.stages().get(id)->at();
+}
+NodeId Control::parentOf(StageTransitionId id) const {
+    return data_.stageTransitions().get(id)->at();
+}
+void Control::link(TimingId id) {
+    const auto node = parentOf(id);
+    data_.nodeControls().ensure(node).timings.push_back(id);
+}
+void Control::link(StageId id) {
+    const auto node = parentOf(id);
+    data_.nodeControls().ensure(node).stages.push_back(id);
+}
+void Control::link(StageTransitionId id) {
+    const auto node = parentOf(id);
+    data_.nodeControls().ensure(node).transitions.push_back(id);
+}
+void Control::unlink(TimingId id) {
+    const auto node = parentOf(id);
+    auto* nc = data_.nodeControls().get(node);
+    assert(nc);
+    erase(nc->timings, id);
+    if (emptied(*nc)) data_.nodeControls().erase(node);
+}
+void Control::unlink(StageId id) {
+    const auto node = parentOf(id);
+    auto* nc = data_.nodeControls().get(node);
+    assert(nc);
+    erase(nc->stages, id);
+    if (emptied(*nc)) data_.nodeControls().erase(node);
+}
+void Control::unlink(StageTransitionId id) {
+    const auto node = parentOf(id);
+    auto* nc = data_.nodeControls().get(node);
+    assert(nc);
+    erase(nc->transitions, id);
+    if (emptied(*nc)) data_.nodeControls().erase(node);
+}
 
-Control::EntityMutation<TimingId> Control::createTiming(SignalConfigId at,
-                                                        int cycleLength) {
-    auto id = data_.timings().emplace(at, cycleLength);
-    registerTiming(data_, at, id);
-    dirty_.insert(at);
+EMut<TimingId, NodeId> Control::createTiming(NodeId at, std::string name) {
+    auto id = createChild(data_.timings(), at, std::move(name));
     return {.id = id, .at = at, .undo = [this, id] {
-                data_.timings().release(removeTimingImpl(id));
+                data_.timings().release(detach(data_.timings(), id));
+            }};
+}
+EMut<TimingId, NodeId> Control::setParams(TimingId id, Timing::Params p) {
+    return Base::setParams(data_.timings(), id, std::move(p));
+}
+EMut<TimingId, NodeId> Control::removeTiming(TimingId id) {
+    derived_.plans().erase(id);
+    auto at = parentOf(id);
+    auto vs = detach(data_.timings(), id);
+    return {.id = id, .at = at, .undo = [this, vs = std::move(vs)] mutable {
+                attach(data_.timings(), std::move(vs));
             }};
 }
 
-Control::ConfigMutation Control::removeTiming(TimingId id) {
-    assert(data_.timings().alive(id));
-    auto vs = removeTimingImpl(id);
-    SignalConfigId configId = vs.value.at();
-    return {.id = configId, .undo = [this, vs = std::move(vs)] mutable {
-                createTimingImpl(std::move(vs));
+EMut<StageId, NodeId> Control::createStage(
+    NodeId at, control::Stage<SignalGroupId> stage) {
+    auto id = createChild(data_.stages(), at, std::move(stage));
+    return {.id = id, .at = at, .undo = [this, id] {
+                data_.stages().release(detach(data_.stages(), id));
+            }};
+}
+EMut<StageId, NodeId> Control::setParams(StageId id, Stage::Params p) {
+    return Base::setParams(data_.stages(), id, std::move(p));
+}
+EMut<StageId, NodeId> Control::removeStage(StageId id) {
+    auto at = parentOf(id);
+    auto vs = detach(data_.stages(), id);
+    return {.id = id, .at = at, .undo = [this, vs = std::move(vs)] mutable {
+                attach(data_.stages(), std::move(vs));
             }};
 }
 
-//
-//  TIMING SEQUENCE MUTATIONS
-//
-
-Control::TimingMutation Control::createSequence(TimingId id, SignalGroupId sg) {
-    assert(data_.timings().alive(id));
-    auto* timing = data_.timings().get(id);
-    SignalConfigId configId = timing->at();
-    timing->createNewSequence(sg);
-    dirty_.insert(configId);
-    return {.timingId = id,
-            .sgId = sg,
-            .at = configId,
-            .undo = [this, id, sg, configId] {
-                data_.timings().get(id)->removeSequence(sg);
-                dirty_.insert(configId);
+EMut<StageTransitionId, NodeId> Control::createTransition(NodeId at,
+                                                          StageId from,
+                                                          StageId to) {
+    auto id = createChild(data_.stageTransitions(), at, from, to);
+    return {.id = id, .at = at, .undo = [this, id] {
+                data_.stageTransitions().release(
+                    detach(data_.stageTransitions(), id));
+            }};
+}
+EMut<StageTransitionId, NodeId> Control::setParams(StageTransitionId id,
+                                                   StageTransition::Params p) {
+    return Base::setParams(data_.stageTransitions(), id, std::move(p));
+}
+EMut<StageTransitionId, NodeId> Control::removeTransition(
+    StageTransitionId id) {
+    auto at = parentOf(id);
+    auto vs = detach(data_.stageTransitions(), id);
+    return {.id = id, .at = at, .undo = [this, vs = std::move(vs)] mutable {
+                attach(data_.stageTransitions(), std::move(vs));
             }};
 }
 
-Control::TimingMutation Control::removeSequence(TimingId id, SignalGroupId sg) {
-    assert(data_.timings().alive(id));
-    auto* timing = data_.timings().get(id);
-    SignalConfigId configId = timing->at();
-    Sequence snap = timing->sequence(sg);
-    timing->removeSequence(sg);
-    dirty_.insert(configId);
-    return {.timingId = id,
-            .sgId = sg,
-            .at = configId,
-            .undo = [this, id, sg, configId, snap = std::move(snap)] mutable {
-                data_.timings().get(id)->insertSequence(sg, std::move(snap));
-                dirty_.insert(configId);
-            }};
-}
-
-Control::TimingMutation Control::setAlwaysActive(TimingId id,
-                                                 SignalGroupId sg) {
-    assert(data_.timings().alive(id));
-    auto* timing = data_.timings().get(id);
-    SignalConfigId configId = timing->at();
-    Sequence snap = timing->sequence(sg);
-    timing->setAlwaysActive(sg);
-    dirty_.insert(configId);
-    return {.timingId = id,
-            .sgId = sg,
-            .at = configId,
-            .undo = [this, id, sg, configId, snap = std::move(snap)] mutable {
-                data_.timings().get(id)->insertSequence(sg, std::move(snap));
-                dirty_.insert(configId);
-            }};
-}
-
-std::expected<Control::TimingMutation, TimingError> Control::setIntervals(
-    TimingId id, SignalGroupId sg, std::vector<Interval> intervals) {
-    assert(data_.timings().alive(id));
-    auto* timing = data_.timings().get(id);
-    SignalConfigId configId = timing->at();
-
-    std::vector<Interval> old;
-    if (const auto* ss = std::get_if<SignalSequence>(&timing->sequence(sg)))
-        old = ss->intervals();
-
-    auto res = timing->setIntervals(sg, std::move(intervals));
-    if (!res) return std::unexpected(res.error());
-    dirty_.insert(configId);
-
-    return TimingMutation{
-        .timingId = id,
-        .sgId = sg,
-        .at = configId,
-        .undo = [this, id, sg, configId, old = std::move(old)] mutable {
-            assert(data_.timings()
-                       .get(id)
-                       ->setIntervals(sg, std::move(old))
-                       .has_value());
-            dirty_.insert(configId);
-        }};
-}
-
-//
-//  DERIVED
-//
-
-void Control::solve(const GraphData& graph, const SignalData& signal,
-                    const SignalDerived& signalDerived) {
-    for (SignalConfigId id : dirty_)
-        recomputeDerived(graph, signal, signalDerived, id);
-    dirty_.clear();
-}
-
-void Control::recomputeDerived(const GraphData& graph, const SignalData& signal,
-                               const SignalDerived& signalDerived,
-                               SignalConfigId id) {
-    if (!signal.configs().alive(id)) {
-        derived_.configCompleteness().erase(id);
-        return;
+Control::Rederived Control::solve(const Signal& signal, const Graph& graph) {
+    Rederived out;
+    for (auto id : dirty<NodeId>()) {
+        if (graph.data().nodes().alive(id)) {
+            recomputeDerived(id, signal);
+            out.nodes.insert(id);
+        } else {
+            evictDerived(id);
+        }
     }
-    derived_.configCompleteness().set(
-        id, control_compute::configCompleteness(graph, signal, id));
-
-    if (const auto* cc = data_.configControls().get(id))
-        for (TimingId tId : cc->timings)
-            derived_.timingValidity().set(
-                tId, control_compute::timingValidity(
-                         signal, signalDerived, *data_.timings().get(tId)));
+    dirty<NodeId>().clear();
+    return out;
 }
 
-//
-//  IMPLEMENTATION HELPERS
-//
+void Control::recomputeDerived(NodeId id, const Signal& signal) {
+    const auto* nc = data_.nodeControls().get(id);
+    if (!nc) return;
+    for (TimingId tid : nc->timings) {
+        assert(data_.timings().alive(tid));
+        const auto* ig = signal.derived().intergreenMatrices().get(id);
+        const auto* t = data_.timings().get(tid);
+        assert(ig);
+        auto groupParams = compute::groupParams(signal, regulations_, id);
+        const auto& steps =
+            control_compute::resolveStepSequence(data_, t->params().steps);
 
-void Control::createTimingImpl(SlotMap<TimingTag, Timing>::VacatedSlot vs) {
-    SignalConfigId configId = vs.value.at();
-    registerTiming(data_, configId, vs.id);
-    data_.timings().reinsert(std::move(vs));
-    dirty_.insert(configId);
+        PlanDerived plan{
+            .core = control::buildTimingPlan(steps),
+            .intergreenViolations =
+                control::validatePlanIntergreen(plan.core, *ig, groupParams),
+            .minimumViolations =
+                control::validatePlanMinimums(plan.core, groupParams),
+        };
+
+        derived_.plans().set(tid, std::move(plan));
+    }
 }
 
-SlotMap<TimingTag, Timing>::VacatedSlot Control::removeTimingImpl(TimingId id) {
-    auto vs = data_.timings().vacate(id);
-    SignalConfigId configId = vs.value.at();
-    unregisterTiming(data_, configId, id);
-    derived_.timingValidity().erase(id);
-    dirty_.insert(configId);
-    return vs;
+void Control::evictDerived(NodeId id) {
+    const auto* nc = data_.nodeControls().get(id);
+    if (!nc) return;
+    for (auto tid : nc->timings) derived_.plans().erase(tid);
 }

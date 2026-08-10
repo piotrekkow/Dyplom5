@@ -8,70 +8,88 @@
 #include "types.hpp"
 
 namespace {
-int findPhaseMin(const GPhase& phase, const GTransition& next,
-                 const GConfig& cfg) {
-    int min = 0;
-    for (auto gid : phase.groupIds) {
-        min = std::max(min, cfg.groups[gid].tMin - next.groups.at(gid).green);
-    }
-    return min;
+// Sum of the non-intergreen (slack green) duration a group is granted
+// during a transition — e.g. a both-active group's full makespan
+int bonusGreen(const control::AspectTransition& tr) {
+    int green = 0;
+    for (const auto& iv : tr.intervals)
+        if (!iv.isIntergreen) green += iv.duration;
+    return green;
+}
+
+std::vector<GId> activeGroupIds(const control::Stage<GId>& stage) {
+    std::vector<GId> ids;
+    for (const auto& [gid, aspect] : stage.groups)
+        if (aspect.isActive) ids.push_back(gid);
+    return ids;
 }
 }  // namespace
 
 std::optional<GGreen> greedyMarginalAlloc(
-    const std::vector<GPhase>& phases,
-    const std::vector<GTransition>& transitions, const GConfig& cfg, int T) {
+    const std::vector<control::Stage<GId>>& stages,
+    const std::vector<control::StageTransition<GId>>& transitions,
+    const GConfig& cfg, int T) {
     int L = 0;
-    for (const auto& tr : transitions) L += tr.makespan;
+    for (const auto& tr : transitions) L += tr.makespan();
     if (T - L < 0) return std::nullopt;
+
+    std::vector<std::vector<GId>> active(stages.size());
+    for (std::size_t i = 0; i < stages.size(); ++i)
+        active[i] = activeGroupIds(stages[i]);
 
     std::vector<int> fixedGreen(cfg.groups.size(), 0);
     for (const auto& tr : transitions)
-        for (const auto& [gid, gtr] : tr.groups) fixedGreen[gid] += gtr.green;
+        for (const auto& [gid, gtr] : tr.transitions)
+            fixedGreen[static_cast<std::size_t>(gid)] += bonusGreen(gtr);
 
     GGreen alloc{
-        .tPhase = std::vector<int>(phases.size(), 0),
+        .tStage = std::vector<int>(stages.size(), 0),
         .tGroup = fixedGreen,
     };
 
-    for (int i = 0; i < phases.size(); ++i) {
-        for (GId gid : phases[i].groupIds) {
-            alloc.tPhase[i] = std::max(alloc.tPhase[i],
-                                       cfg.groups[gid].tMin - fixedGreen[gid]);
+    for (std::size_t i = 0; i < stages.size(); ++i) {
+        for (GId gid : active[i]) {
+            alloc.tStage[i] =
+                std::max(alloc.tStage[i],
+                         cfg.groups[static_cast<std::size_t>(gid)].tMin -
+                             fixedGreen[static_cast<std::size_t>(gid)]);
         }
     }
 
-    for (int i = 0; i < (int)phases.size(); ++i)
-        for (GId gid : phases[i].groupIds) alloc.tGroup[gid] += alloc.tPhase[i];
+    for (std::size_t i = 0; i < stages.size(); ++i)
+        for (GId gid : active[i])
+            alloc.tGroup[static_cast<std::size_t>(gid)] += alloc.tStage[i];
 
-    int minSum = std::reduce(alloc.tPhase.begin(), alloc.tPhase.end());
+    int minSum = std::reduce(alloc.tStage.begin(), alloc.tStage.end());
     int slack = T - L - minSum;
     if (slack < 0) return std::nullopt;
 
-    auto Tf = static_cast<float>(T);
-    auto reduction = [&](int phaseIdx) {
-        float delta = 0.f;
-        for (GId gid : phases[phaseIdx].groupIds) {
-            auto gtf = static_cast<float>(alloc.tGroup[gid]);
-            const auto& g = cfg.groups[gid];
-            delta += groupDelay(g, {.greenTime = gtf, .T = Tf}) -
-                     groupDelay(g, {.greenTime = gtf + 1, .T = Tf});
+    auto Td = static_cast<double>(T);
+    auto reduction = [&](std::size_t idx) {
+        double delta = 0.0;
+        for (GId gid : active[idx]) {
+            auto gtd = static_cast<double>(
+                alloc.tGroup[static_cast<std::size_t>(gid)]);
+            const auto& g = cfg.groups[static_cast<std::size_t>(gid)];
+            delta += groupDelay(g, gtd, Td) - groupDelay(g, gtd + 1, Td);
         }
         return delta;
     };
 
-    std::vector<int> xwalkCounts(phases.size(), 0);
-    for (int i = 0; i < (int)phases.size(); ++i)
-        for (GId gid : phases[i].groupIds)
-            if (cfg.groups[gid].kind == GKind::Crosswalk) xwalkCounts[i]++;
+    std::vector<int> xwalkCounts(stages.size(), 0);
+    for (std::size_t i = 0; i < stages.size(); ++i)
+        for (GId gid : active[i])
+            if (cfg.groups[static_cast<std::size_t>(gid)].kind ==
+                GKind::Crosswalk)
+                xwalkCounts[i]++;
 
     while (slack-- > 0) {
-        int bestIdx = 0;
-        float bestDelta = reduction(0);
+        std::size_t bestIdx = 0;
+        double bestDelta = reduction(0);
         int bestXwalks = xwalkCounts[0];
 
-        for (int i = 1; i < (int)phases.size(); ++i) {
-            float delta = reduction(i);
+        for (std::size_t i = 1; i < stages.size(); ++i) {
+            double delta = reduction(i);
             if (delta > bestDelta ||
                 (delta == bestDelta && xwalkCounts[i] > bestXwalks)) {
                 bestDelta = delta;
@@ -80,9 +98,10 @@ std::optional<GGreen> greedyMarginalAlloc(
             }
         }
 
-        alloc.tPhase[bestIdx]++;
-        for (GId gid : phases[bestIdx].groupIds) alloc.tGroup[gid]++;
+        alloc.tStage[bestIdx]++;
+        for (GId gid : active[bestIdx])
+            alloc.tGroup[static_cast<std::size_t>(gid)]++;
     }
 
-    return std::move(alloc);
+    return alloc;
 }

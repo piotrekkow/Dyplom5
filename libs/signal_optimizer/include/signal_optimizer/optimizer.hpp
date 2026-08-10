@@ -1,9 +1,10 @@
 #pragma once
 
-#include <optional>
+#include <control/schema/stage_sequence.hpp>
+#include <expected>
+#include <functional>
 #include <road_network/demand.hpp>
 #include <road_network/graph.hpp>
-#include <road_network/control/data/sequence.hpp>
 #include <road_network/util/ids.hpp>
 #include <vector>
 
@@ -14,24 +15,44 @@ struct MovementGroupResult {
     std::vector<MovementId> movements;
     bool isProtected;
     int minGreen;
-    Sequence sequence;
 };
 
 struct CrosswalkGroupResult {
     CrosswalkSeriesId seriesId;
     std::vector<CrosswalkId> crosswalks;
     int minGreen;
-    Sequence sequence;
+};
+
+struct OptimizationStats {
+    int configs = 0;
+    long sequences = 0;
+    long fullyInfeasible = 0;
 };
 
 struct OptimizeResult {
     std::vector<MovementGroupResult> mgResults;
     std::vector<CrosswalkGroupResult> cgResults;
+    control::StageSequence<int> stages;
+    int cycleLength;
+    OptimizationStats stats;
+};
+
+enum class OptimizeError : uint8_t {
+    InvalidNode,
+    InvalidCycleLength,
+    MissingDemandData,
+    NoStreams,
+    NoConfigurations,
+    NoFeasiblePlan,
+    Cancelled,
+    InternalFailure,
 };
 
 // Runs the full optimization pipeline for a single intersection node.
-// Returns nullopt if the node has no entries/series or no feasible plan exists.
-std::optional<OptimizeResult> optimize(NodeId node, const Graph& graph,
-                                       const Demand& demand, int cycleLength);
+// Failures are reported explicitly; no partial result is returned.
+std::expected<OptimizeResult, OptimizeError> optimize(
+    NodeId node, const Graph& graph, const Demand& demand, int cycleLength,
+    std::function<bool()> cancelled = {},
+    std::function<void(int completed, int total)> progress = {});
 
 }  // namespace signal_optimizer

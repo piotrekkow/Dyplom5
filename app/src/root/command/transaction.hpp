@@ -5,7 +5,8 @@
 #include <map>
 #include <ranges>
 
-#include "bus/event_bus.hpp"
+#include "bus/impl/event_bus.hpp"
+#include "solve_hooks.hpp"
 #include "solve_priority.hpp"
 #include "undo_command.hpp"
 
@@ -30,11 +31,6 @@ class Transaction {
             [&bus, event = std::move(undoEvent)] { bus.publish(event); });
     }
 
-    void recordUndoSilent(UndoFn undo) {
-        assert(!committed_);
-        undos_.emplace_back(std::move(undo));
-    }
-
     template <typename E>
     void recordEvent(EventBus<E>& bus, E event) {
         assert(!committed_ && "record called after commit");
@@ -42,23 +38,24 @@ class Transaction {
             [&bus, event = std::move(event)] { bus.publish(event); });
     }
 
-    template <typename E>
-    void recordUndoEvent(EventBus<E>& bus, E event) {
-        assert(!committed_ && "record called after commit");
-        undoEvents_.emplace_back(
-            [&bus, event = std::move(event)] { bus.publish(event); });
+    void addSolve(SolvePriority priority, SolveHooks solve) {
+        assert(!committed_ && "addSolve called after commit");
+        solves_.try_emplace(priority, std::move(solve));
     }
 
-    void addSolve(SolvePriority priority, std::function<void()> fn) {
-        assert(!committed_ && "addSolve called after commit");
-        solves_.try_emplace(priority, std::move(fn));
+    void solveUpto(SolvePriority upto) {
+        for (auto& [prio, solve] : solves_) {
+            if (prio >= upto) break;
+            solve.rederive();
+        }
     }
 
     [[nodiscard]] UndoCommand commit() {
         assert(!committed_ && "double commit");
 
         committed_ = true;
-        for (auto& [_, fn] : solves_) fn();
+        for (auto& [_, s] : solves_) s.rederive();
+        for (auto& [_, s] : solves_) s.flush();
         for (auto& fn : events_) fn();
         events_.clear();
 
@@ -71,10 +68,8 @@ class Transaction {
     void rollback() {
         assert(!committed_ && "rollback after commit");
         rollbackImpl();
-        committed_ = true;  // sentinel: prevents destructor double-rollback
+        committed_ = true;  // prevents destructor double-rollback
     }
-
-    [[nodiscard]] bool committed() const { return committed_; }
 
    private:
     void rollbackImpl() {
@@ -85,6 +80,7 @@ class Transaction {
                 assert(false && "UndoFn threw — graph state may be corrupt");
             }
         }
+        for (auto& [_, s] : solves_) s.rederive();
         events_.clear();
         undos_.clear();
         undoEvents_.clear();
@@ -92,7 +88,8 @@ class Transaction {
 
     bool committed_ = false;
     std::vector<EventFn> events_;
-    std::map<SolvePriority, std::function<void()>> solves_;
+
+    std::map<SolvePriority, SolveHooks> solves_;
 
     std::vector<UndoFn> undos_;
     std::vector<EventFn> undoEvents_;

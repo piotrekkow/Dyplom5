@@ -1,319 +1,254 @@
 #include "signal_editor.hpp"
 
-#include <algorithm>
+#include <cmath>
+#include <common/overloaded.hpp>
+#include <expected>
+#include <regulations/regulations.hpp>
 #include <road_network/graph.hpp>
-#include <road_network/signal/data/signal_group.hpp>
-#include <unordered_set>
-#include <vector>
+#include <road_network/signal.hpp>
 
+#include "bus/impl/dirty_events.hpp"
 #include "bus/network_event_bus.hpp"
-#include "bus/network_events.hpp"
+#include "regulations/types/signal_kind.hpp"
+#include "regulations/types/stream_kind.hpp"
+#include "road_network/signal/data/crosswalk_signal_group.hpp"
+#include "road_network/signal/data/movement_signal_group.hpp"
 #include "road_network/util/ids.hpp"
-#include "root/command/solve_priority.hpp"
-#include "root/command/transaction.hpp"
+#include "root/editor/util/editor_errors.hpp"
+#include "util/apply_tx.hpp"
 
 SignalEditor::SignalEditor(Signal& signal, const Graph& graph,
-                           NetworkEventBus& bus)
-    : signal_(signal), graph_(graph), bus_(bus) {}
-
-//
-//  INTERSECTION TX
-//
-
-IntersectionId SignalEditor::createIntersectionTx(
-    Transaction& tx, const std::vector<NodeId>& nodes, std::string name) {
-    auto mut = signal_.createIntersection(std::move(name));
-    IntersectionId id = mut.id;
-    tx.recordUndo(std::move(mut.undo), bus_.intersectionRemoved,
-                  IntersectionRemoved{id});
-    tx.recordEvent(bus_.intersectionCreated, IntersectionCreated{id});
-
-    for (NodeId node : nodes) addNodeToIntersectionTx(tx, id, node);
-    return id;
+                           NetworkEventBus& bus, DirtyEventBus& dirty,
+                           const Regulations& regulations)
+    : signal_(signal),
+      graph_(graph),
+      bus_(bus),
+      dirty_(dirty),
+      regulations_(regulations) {
+    subs_.add(dirty_.nodeUpdated,
+              [this](UpdatedTx<NodeId> e) { onNodeUpdated(e); });
+    subs_.add(dirty_.nodeRemoved,
+              [this](RemovedTx<NodeId> e) { onNodeRemoved(e); });
+    subs_.add(dirty_.entryRemoved,
+              [this](RemovedTx<EntryId, NodeId> e) { onEntryRemoved(e); });
+    subs_.add(dirty_.movementRemoved, [this](RemovedTx<MovementId, NodeId> e) {
+        onMovementRemoved(e);
+    });
+    subs_.add(
+        dirty_.crosswalkUpdated,
+        [this](UpdatedTx<CrosswalkId, NodeId> e) { onCrosswalkUpdated(e); });
+    subs_.add(
+        dirty_.crosswalkRemoved,
+        [this](RemovedTx<CrosswalkId, NodeId> e) { onCrosswalkRemoved(e); });
 }
 
-void SignalEditor::addNodeToIntersectionTx(Transaction& tx, IntersectionId id,
-                                           NodeId node) {
-    auto mut = signal_.addNode(id, node);
-    tx.recordUndo(std::move(mut.undo), bus_.intersectionNodesChanged,
-                  IntersectionNodesChanged{id});
-    tx.recordEvent(bus_.intersectionNodesChanged,
-                   IntersectionNodesChanged{id});
-}
+std::expected<SignalGroupId, SignalGroupErrors>
+SignalEditor::createMovementGroup(Transaction& tx, NodeId node,
+                                  std::vector<ClusterId> clusters) {
+    assert(!clusters.empty());
 
-void SignalEditor::removeNodeFromIntersectionTx(Transaction& tx,
-                                                IntersectionId id,
-                                                NodeId node) {
-    auto mut = signal_.removeNode(id, node);
-    tx.recordUndo(std::move(mut.undo), bus_.intersectionNodesChanged,
-                  IntersectionNodesChanged{id});
-    tx.recordEvent(bus_.intersectionNodesChanged,
-                   IntersectionNodesChanged{id});
-}
-
-void SignalEditor::removeIntersectionTx(Transaction& tx, IntersectionId id) {
-    auto nodesCopy = signal_.data().intersections().get(id)->nodes();
-    for (NodeId node : nodesCopy) removeNodeFromIntersectionTx(tx, id, node);
-
-    auto mut = signal_.removeIntersection(id);
-    tx.recordUndo(std::move(mut.undo), bus_.intersectionCreated,
-                  IntersectionCreated{id});
-    tx.recordEvent(bus_.intersectionRemoved, IntersectionRemoved{id});
-}
-
-//
-//  CONFIG TX
-//
-
-SignalConfigId SignalEditor::createConfigTx(Transaction& tx, IntersectionId at,
-                                            std::string name) {
-    auto mut = signal_.createConfig(at, std::move(name));
-    SignalConfigId id = mut.id;
-    tx.recordUndo(std::move(mut.undo), bus_.signalConfigRemoved,
-                  SignalConfigRemoved{id, at});
-    tx.recordEvent(bus_.signalConfigCreated, SignalConfigCreated{id, at});
-    return id;
-}
-
-void SignalEditor::renameConfigTx(Transaction& tx, SignalConfigId id,
-                                  std::string name) {
-    auto mut = signal_.renameConfig(id, std::move(name));
-    tx.recordUndo(std::move(mut.undo), bus_.signalConfigRenamed,
-                  SignalConfigRenamed{id, mut.at});
-    tx.recordEvent(bus_.signalConfigRenamed, SignalConfigRenamed{id, mut.at});
-}
-
-void SignalEditor::removeConfigTx(Transaction& tx, SignalConfigId id) {
-    auto sgsCopy = signal_.data().configs().get(id)->signalGroups();
-    for (SignalGroupId sgId : sgsCopy) removeSignalGroupTx(tx, sgId);
-
-    auto mut = signal_.removeConfig(id);
-    IntersectionId at = mut.at;
-    tx.recordUndo(std::move(mut.undo), bus_.signalConfigCreated,
-                  SignalConfigCreated{id, at});
-    tx.recordEvent(bus_.signalConfigRemoved, SignalConfigRemoved{id, at});
-    tx.addSolve(SolvePriority::SIGNAL,
-                [this] { signal_.solve(graph_.derived()); });
-}
-
-//
-//  SIGNAL GROUP TX
-//
-
-std::expected<SignalGroupId, SignalGroupError>
-SignalEditor::addMovementGroupTx(Transaction& tx, SignalConfigId config,
-                                 std::vector<ClusterId> clusters,
-                                 bool isProtected, int intervalMin) {
-    const auto* cfg = signal_.data().configs().get(config);
-    for (SignalGroupId sgId : cfg->signalGroups()) {
-        const auto* sg = signal_.data().signalGroups().get(sgId);
-        const auto* mg = std::get_if<MovementSignalGroup>(sg);
-        if (!mg) continue;
-        for (ClusterId c : clusters)
-            if (std::ranges::find(mg->clusters(), c) != mg->clusters().end())
-                return std::unexpected(
-                    SignalGroupError::DuplicateClusterMembership);
-    }
+    const auto* clFront = graph_.data().clusters().get(clusters.front());
+    const auto* mFront =
+        graph_.data().movements().get(clFront->movements().front());
+    auto type = mFront->params().type;
 
     std::vector<MovementId> movements;
-    for (auto c : clusters) {
-        const auto& movs = graph_.data().clusters().get(c)->movements();
-        movements.insert(movements.end(), movs.begin(), movs.end());
-    }
-    return addSignalGroupTx(
-        tx, signal_.createMovementGroup(config, std::move(clusters),
-                                        std::move(movements), isProtected,
-                                        intervalMin));
-}
+    for (auto cid : clusters) {
+        const auto* cl = graph_.data().clusters().get(cid);
+        const auto& clmv = cl->movements();
 
-std::expected<SignalGroupId, SignalGroupError>
-SignalEditor::addCrosswalkGroupTx(Transaction& tx, SignalConfigId config,
-                                  std::vector<CrosswalkId> crosswalks,
-                                  int intervalMin) {
-    const auto* cfg = signal_.data().configs().get(config);
-    for (SignalGroupId sgId : cfg->signalGroups()) {
-        const auto* sg = signal_.data().signalGroups().get(sgId);
-        const auto* cg = std::get_if<CrosswalkSignalGroup>(sg);
-        if (!cg) continue;
-        for (CrosswalkId c : crosswalks)
-            if (std::ranges::find(cg->crosswalks(), c) !=
-                cg->crosswalks().end())
+        for (auto mid : clmv) {
+            if (type != graph_.data().movements().get(mid)->params().type)
                 return std::unexpected(
-                    SignalGroupError::DuplicateCrosswalkMembership);
+                    SignalGroupErrors::CandidateMovementsOfMultipleTypes);
+        }
+
+        movements.insert(movements.end(), clmv.begin(), clmv.end());
     }
-    return addSignalGroupTx(tx, signal_.createCrosswalkGroup(
-                                    config, std::move(crosswalks),
-                                    intervalMin));
+    auto entry = graph_.data().clusters().get(clusters.front())->at();
+    auto kind = toSignalKind(type);
+    const auto& min = regulations_.aspects(kind).minGreen;
+
+    auto mut = signal_.createMovementGroup(node, entry, std::move(clusters),
+                                           std::move(movements), min.fixed);
+    const auto id = mut.id;
+    dirty_.nodeUpdated.publish(UpdatedTx<NodeId>{.id = node, .tx = tx});
+    return applyTx(tx, std::move(mut), bus_.signalGroupCreated,
+                   Created<SignalGroupId, NodeId>{.id = id, .at = node},
+                   bus_.signalGroupRemoved,
+                   Removed<SignalGroupId, NodeId>{.id = id, .at = node});
 }
 
-std::expected<SignalGroupId, SignalGroupError>
-SignalEditor::addTurnArrowGroupTx(Transaction& tx, SignalConfigId config,
-                                  MovementId movement, int intervalMin) {
-    const auto* turn = graph_.derived().turnTypes().get(movement);
-    if (!turn || *turn != TurnType::RIGHT)
-        return std::unexpected(
-            SignalGroupError::MovementNotEligibleForTurnArrow);
+std::expected<SignalGroupId, SignalGroupErrors>
+SignalEditor::createCrosswalkGroup(Transaction& tx, NodeId node,
+                                   std::vector<CrosswalkId> crosswalks) {
+    const auto& cwMap = graph_.data().crosswalks();
+    auto csid = cwMap.get(crosswalks.front())->parent();
 
-    const auto* cfg = signal_.data().configs().get(config);
-    for (SignalGroupId sgId : cfg->signalGroups()) {
-        const auto* sg = signal_.data().signalGroups().get(sgId);
-        const auto* tg = std::get_if<ConditionalTurnArrowSignalGroup>(sg);
-        if (tg && tg->movement() == movement)
+    for (auto cid : crosswalks)
+        if (cwMap.get(cid)->parent() != csid)
             return std::unexpected(
-                SignalGroupError::DuplicateTurnArrowForMovement);
-    }
-    return addSignalGroupTx(
-        tx, signal_.createTurnArrowGroup(config, movement, intervalMin));
+                SignalGroupErrors::CandidateCrosswalksOfMultipleSeries);
+
+    const auto* cs = graph_.data().crosswalkSeries().get(csid);
+    const SignalKind sigKind = toSignalKind(cs->params().type);
+    StreamKind strKind = toStreamKind(cs->params().type);
+    const auto& min = regulations_.aspects(sigKind).minGreen;
+    double regEvac = regulations_.kinematics(strKind).evacSpeedCeil;
+    double evacSpeed =
+        cs->params().criticalGreenSpeedOverride.value_or(regEvac);
+    const int cross =
+        std::ceil(cs->params().criticalGreenPath.length() / evacSpeed);
+
+    auto mut = signal_.createCrosswalkGroup(
+        node, std::move(crosswalks), sigKind, std::max(cross, min.fixed));
+    const auto id = mut.id;
+    dirty_.nodeUpdated.publish(UpdatedTx<NodeId>{.id = node, .tx = tx});
+    return applyTx(tx, std::move(mut), bus_.signalGroupCreated,
+                   Created<SignalGroupId, NodeId>{.id = id, .at = node},
+                   bus_.signalGroupRemoved,
+                   Removed<SignalGroupId, NodeId>{.id = id, .at = node});
 }
 
-void SignalEditor::setIntervalMinTx(Transaction& tx, SignalGroupId id,
-                                    int min) {
-    auto mut = signal_.setIntervalMin(id, min);
-    tx.recordUndo(std::move(mut.undo), bus_.signalGroupChanged,
-                  SignalGroupChanged{id, mut.config, mut.at});
-    tx.recordEvent(bus_.signalGroupChanged,
-                   SignalGroupChanged{id, mut.config, mut.at});
-    tx.addSolve(SolvePriority::SIGNAL,
-                [this] { signal_.solve(graph_.derived()); });
+std::expected<void, SignalGroupErrors> SignalEditor::setSgProtection(
+    Transaction& tx, SignalGroupId id, bool request) {
+    auto* sg = signal_.data().signalGroups().get(id);
+    auto msg = std::get_if<MovementSignalGroup>(sg);
+    if (!msg)
+        return std::unexpected(
+            SignalGroupErrors::ProtectionEditOnNonMovementGroup);
+
+    auto params = msg->params();
+    params.requestProtected = request;
+
+    auto mut = signal_.setParams(id, params);
+    const auto node = mut.at;
+    dirty_.nodeUpdated.publish(UpdatedTx<NodeId>{.id = node, .tx = tx});
+    applyTxUpdate(tx, std::move(mut), bus_.signalGroupUpdated,
+                  Updated<SignalGroupId, NodeId>{.id = id, .at = node});
+    return {};
 }
 
-void SignalEditor::setProtectedTx(Transaction& tx, SignalGroupId id,
-                                  bool isProtected) {
-    auto mut = signal_.setProtected(id, isProtected);
-    tx.recordUndo(std::move(mut.undo), bus_.signalGroupChanged,
-                  SignalGroupChanged{id, mut.config, mut.at});
-    tx.recordEvent(bus_.signalGroupChanged,
-                   SignalGroupChanged{id, mut.config, mut.at});
-    tx.addSolve(SolvePriority::SIGNAL,
-                [this] { signal_.solve(graph_.derived()); });
+void SignalEditor::setSgIntervalMinFixed(Transaction& tx, SignalGroupId id,
+                                         int min) {
+    auto* sg = signal_.data().signalGroups().get(id);
+
+    auto mut = std::visit(
+        [&](auto& sgv) {
+            auto params = sgv.params();
+            params.intervalMinFixed = min;
+            return signal_.setParams(id, params);
+        },
+        *sg);
+
+    const auto node = mut.at;
+    dirty_.nodeUpdated.publish(UpdatedTx<NodeId>{.id = node, .tx = tx});
+    applyTxUpdate(tx, std::move(mut), bus_.signalGroupUpdated,
+                  Updated<SignalGroupId, NodeId>{.id = id, .at = node});
 }
 
-void SignalEditor::markConfigStaleTx(Transaction& tx, SignalConfigId id) {
-    signal_.markStale(id);
-    tx.recordUndoSilent([this, id] { signal_.markStale(id); });
-    tx.addSolve(SolvePriority::SIGNAL,
-                [this] { signal_.solve(graph_.derived()); });
+void SignalEditor::setSgKind(Transaction& tx, SignalGroupId id,
+                             SignalKind kind) {
+    auto* sg = signal_.data().signalGroups().get(id);
+    auto mut = std::visit(
+        overloaded{
+            [&](const MovementSignalGroup& msg) {
+                if (!(kind == SignalKind::VEHICLE || kind == SignalKind::BUS ||
+                      kind == SignalKind::TRAM))
+                    assert(false);
+                auto params = msg.params();
+                params.kind = kind;
+                return signal_.setParams(id, params);
+            },
+            [&](const CrosswalkSignalGroup& csg) {
+                // A crosswalk group's kind is fixed by its topology; it is
+                // never set through the inspector.
+                assert(false);
+                return signal_.setParams(id, csg.params());
+            },
+        },
+        *sg);
+    const auto node = mut.at;
+    dirty_.nodeUpdated.publish(UpdatedTx<NodeId>{.id = node, .tx = tx});
+    applyTxUpdate(tx, std::move(mut), bus_.signalGroupUpdated,
+                  Updated<SignalGroupId, NodeId>{.id = id, .at = node});
 }
 
-void SignalEditor::removeSignalGroupTx(Transaction& tx, SignalGroupId id) {
+void SignalEditor::removeSignalGroup(Transaction& tx, SignalGroupId id) {
+    const auto node = signal_.parentOf(id);
     auto mut = signal_.removeSignalGroup(id);
-    tx.recordUndo(std::move(mut.undo), bus_.signalGroupCreated,
-                  SignalGroupCreated{id, mut.config, mut.at});
-    tx.recordEvent(bus_.signalGroupRemoved,
-                   SignalGroupRemoved{id, mut.config, mut.at});
-    tx.addSolve(SolvePriority::SIGNAL,
-                [this] { signal_.solve(graph_.derived()); });
+    dirty_.signalGroupRemoved.publish(
+        RemovedTx<SignalGroupId, NodeId>{.id = id, .at = node, .tx = tx});
+    applyTx(tx, std::move(mut), bus_.signalGroupRemoved,
+            Removed<SignalGroupId, NodeId>{.id = id, .at = node},
+            bus_.signalGroupCreated,
+            Created<SignalGroupId, NodeId>{.id = id, .at = node});
 }
 
-//
-//  CONST QUERIES FOR EDITOR CONTEXT
-//
-
-std::optional<IntersectionId> SignalEditor::intersectionAt(NodeId id) const {
-    return signal_.data().intersectionAt(id);
+void SignalEditor::registerSolve(Transaction& tx) {
+    reNodes_.clear();
+    tx.addSolve(SolvePriority::SIGNAL, {
+                                           .rederive = [this] { rederive(); },
+                                           .flush = [this] { flush(); },
+                                       });
 }
 
-std::vector<SignalConfigId> SignalEditor::configsOf(IntersectionId id) const {
-    const auto* in = signal_.data().intersections().get(id);
-    if (!in) return {};
-    return in->configs();
+void SignalEditor::rederive() {
+    auto r = signal_.solve(graph_);
+    reNodes_.insert(r.nodes.begin(), r.nodes.end());
 }
 
-namespace {
-std::vector<SignalConfigId> configsAtNode(const Signal& signal, NodeId at) {
-    auto intersection = signal.data().intersectionAt(at);
-    if (!intersection) return {};
-    return signal.data().intersections().get(*intersection)->configs();
-}
-}  // namespace
-
-std::vector<SignalGroupId> SignalEditor::groupsReferencing(
-    NodeId at, const std::vector<ClusterId>& clusters,
-    const std::vector<MovementId>& movements) const {
-    std::vector<SignalGroupId> result;
-    for (SignalConfigId cfgId : configsAtNode(signal_, at)) {
-        const auto* cfg = signal_.data().configs().get(cfgId);
-        for (SignalGroupId sgId : cfg->signalGroups()) {
-            const auto* sg = signal_.data().signalGroups().get(sgId);
-            bool match = false;
-
-            if (const auto* mov = std::get_if<MovementSignalGroup>(sg)) {
-                match =
-                    std::ranges::any_of(mov->clusters(), [&](ClusterId cid) {
-                        return std::ranges::find(clusters, cid) !=
-                               clusters.end();
-                    });
-            } else if (const auto* turn =
-                           std::get_if<ConditionalTurnArrowSignalGroup>(sg)) {
-                match = std::ranges::find(movements, turn->movement()) !=
-                        movements.end();
-            }
-
-            if (match) result.push_back(sgId);
+void SignalEditor::flush() {
+    for (auto id : reNodes_) {
+        if (graph_.data().nodes().alive(id)) {
+            bus_.nodeUpdatedSignal.publish(Updated<NodeId>{.id = id});
         }
     }
-    return result;
+    reNodes_.clear();
 }
 
-std::vector<SignalGroupId> SignalEditor::groupsReferencingCrosswalk(
-    NodeId at, CrosswalkId id) const {
-    std::vector<SignalGroupId> result;
-    for (SignalConfigId cfgId : configsAtNode(signal_, at)) {
-        const auto* cfg = signal_.data().configs().get(cfgId);
-        for (SignalGroupId sgId : cfg->signalGroups()) {
-            const auto* sg = signal_.data().signalGroups().get(sgId);
-            if (const auto* g = std::get_if<CrosswalkSignalGroup>(sg)) {
-                if (std::ranges::find(g->crosswalks(), id) !=
-                    g->crosswalks().end())
-                    result.push_back(sgId);
-            }
-        }
-    }
-    return result;
+void SignalEditor::onNodeUpdated(UpdatedTx<NodeId> e) {
+    e.tx.solveUpto(SolvePriority::SIGNAL);
+    signal_.markDirty(e.id);
 }
 
-std::vector<MovementId> SignalEditor::eligibleTurnArrowMovements(
-    SignalConfigId config) const {
-    std::vector<MovementId> result;
-    const auto* cfg = signal_.data().configs().get(config);
-    if (!cfg) return result;
-    const auto* intersection = signal_.data().intersections().get(cfg->at());
-    if (!intersection) return result;
-
-    std::unordered_set<MovementId> taken;
-    for (SignalGroupId sgId : cfg->signalGroups()) {
-        const auto* sg = signal_.data().signalGroups().get(sgId);
-        if (const auto* tg = std::get_if<ConditionalTurnArrowSignalGroup>(sg))
-            taken.insert(tg->movement());
+void SignalEditor::onNodeRemoved(RemovedTx<NodeId> e) {
+    for (auto id : *signal_.data().nodeGroups().get(e.id)) {
+        removeSignalGroup(e.tx, id);
     }
-
-    for (NodeId nId : intersection->nodes()) {
-        const auto* node = graph_.data().nodes().get(nId);
-        if (!node) continue;
-        for (EntryId eId : node->entries()) {
-            for (MovementId mId :
-                 graph_.data().entries().get(eId)->movements()) {
-                const auto* turn = graph_.derived().turnTypes().get(mId);
-                if (turn && *turn == TurnType::RIGHT && !taken.contains(mId))
-                    result.push_back(mId);
-            }
-        }
-    }
-    return result;
 }
 
-//
-//  PRIVATE
-//
+void SignalEditor::onEntryRemoved(RemovedTx<EntryId, NodeId> e) {
+    std::vector<SignalGroupId> doomed;
+    for (auto gid : *signal_.data().nodeGroups().get(e.at)) {
+        auto g = signal_.data().signalGroups().get(gid);
+        if (const auto* msg = std::get_if<MovementSignalGroup>(g))
+            if (msg->entry() == e.id) doomed.push_back(gid);
+    }
+    for (auto id : doomed) removeSignalGroup(e.tx, id);
+}
 
-SignalGroupId SignalEditor::addSignalGroupTx(Transaction& tx,
-                                             Signal::GroupMutation mut) {
-    SignalGroupId id = mut.id;
-    tx.recordUndo(std::move(mut.undo), bus_.signalGroupRemoved,
-                  SignalGroupRemoved{id, mut.config, mut.at});
-    tx.recordEvent(bus_.signalGroupCreated,
-                   SignalGroupCreated{id, mut.config, mut.at});
-    tx.addSolve(SolvePriority::SIGNAL,
-                [this] { signal_.solve(graph_.derived()); });
-    return id;
+void SignalEditor::onMovementRemoved(RemovedTx<MovementId, NodeId> e) {
+    removeGroupsWithStream(e.tx, StreamId{e.id}, e.at);
+}
+
+void SignalEditor::onCrosswalkUpdated(UpdatedTx<CrosswalkId, NodeId> e) {
+    removeGroupsWithStream(e.tx, StreamId{e.id}, e.at);
+}
+
+void SignalEditor::onCrosswalkRemoved(RemovedTx<CrosswalkId, NodeId> e) {
+    removeGroupsWithStream(e.tx, StreamId{e.id}, e.at);
+}
+
+void SignalEditor::removeGroupsWithStream(Transaction& tx, StreamId stream,
+                                          NodeId at) {
+    std::vector<SignalGroupId> doomed;
+    for (auto gid : *signal_.data().nodeGroups().get(at)) {
+        auto g = signal_.data().signalGroups().get(gid);
+        const std::vector<StreamId> streams =
+            std::visit([](const auto& sg) { return sg.streams(); }, *g);
+        if (std::ranges::find(streams, stream) != streams.end())
+            doomed.push_back(gid);
+    }
+    for (auto id : doomed) removeSignalGroup(tx, id);
 }
