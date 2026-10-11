@@ -43,21 +43,16 @@ using GIntergreenMatrix = Matrix<GId, int>;
 // [evac group id][appr group id] = bool whether can run simultaneously
 using GCompatibilityGraph = std::unordered_map<GId, std::unordered_set<GId>>;
 
-// Defines how the movements on each entry are split into signal groups, and
-// whether each group is protected or permitted.
 struct GConfig {
     std::vector<GGroup> groups;
     GIntergreenMatrix intergreen;
     GCompatibilityGraph compatibility;
 };
 
-// Set of signal groups that all display green simultaneously without violating
-// conflict or intergreen rules
 struct GStage {
     std::vector<GId> groupIds;
 };
 
-// green time allocation for groups and stages
 struct GGreen {
     std::vector<int> tStage;
     std::vector<int> tGroup;

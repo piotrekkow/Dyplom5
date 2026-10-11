@@ -7,8 +7,8 @@
 #include <regulations/regulations.hpp>
 #include <regulations/types/stream_kind.hpp>
 
-#include "road_network/graph/derived/graph_geometry.hpp"
 #include "road_network/graph.hpp"
+#include "road_network/graph/derived/graph_geometry.hpp"
 #include "road_network/graph/graph_data.hpp"
 #include "road_network/util/compute_helpers.hpp"
 
@@ -68,7 +68,7 @@ std::vector<ConflictPoint> movCrossPoints(
     const CrosswalkGeometry& apprCrosswalk) {
     std::vector<ConflictPoint> cpVec;
     for (const auto& evacPath : evacPaths) {
-        // The crosswalk is a band between its anchor and split lines; the
+        // The crosswalk is a band between its anchor and split line; the
         // evacuating vehicle has cleared it at the farther edge crossing.
         auto anchor = evacPath.firstIntersection(apprCrosswalk.anchor);
         auto split = evacPath.firstIntersection(apprCrosswalk.split);
@@ -151,9 +151,7 @@ namespace {
 struct StreamParams {
     StreamKind kind;
     double v_evac;  // evacuation speed (v_e)
-    double v_appr;  // approach speed (v_d). Crosswalk conflicts always carry
-                    // s_appr == 0 (see movCrossPoints), so this only needs
-                    // to be nonzero to keep t_appr's s_appr/v_appr out of 0/0.
+    double v_appr;  // approach speed (v_d)
     double l_evac;  // clearing length  (l_p)
     double t_y;     // yellow time
 };
@@ -304,11 +302,6 @@ StreamMatrix<int> streamApproachMap(const Graph& graph, NodeId id) {
         return it->second;
     };
 
-    // Travel time for the approaching stream to reach the shared point, taking
-    // the nearest conflict point (soonest arrival) as the binding deadline.
-    // Floored, so the deadline is conservative. -1 (inactive) when the pair
-    // never meets, or when the approaching stream is a crosswalk: pedestrians
-    // are already at the line, so they impose no deadline on anyone else.
     auto approach = [&](StreamId apprId,
                         const std::vector<ConflictPoint>& cps) -> int {
         if (std::holds_alternative<CrosswalkId>(apprId)) return -1;
@@ -324,8 +317,6 @@ StreamMatrix<int> streamApproachMap(const Graph& graph, NodeId id) {
     conflicts->forEachPair([&](StreamId evacId, StreamId apprId,
                                const std::vector<ConflictPoint>& cpsFwd,
                                const std::vector<ConflictPoint>& cpsRev) {
-        // Forward points have apprId approaching, so its travel time bounds
-        // evacId (and symmetrically for the reverse).
         result.set(evacId, apprId, approach(apprId, cpsFwd),
                    approach(evacId, cpsRev));
     });

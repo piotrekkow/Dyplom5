@@ -38,7 +38,7 @@ bool Vector2::isZero() const noexcept {
 }
 
 bool Vector2::isCollinear(Vector2 v) const noexcept {
-    // |cross| / (|a| \cdot |b|) \approx sin \theta — pure angle test
+    // |cross| / (|a| \cdot |b|) \approx sin \theta, pure angle test
     const double c = cross(v);
     const double denom = lengthSquared() * v.lengthSquared();  // |a|^2|b|^2
     return c * c <= geometryEpsilon * geometryEpsilon *

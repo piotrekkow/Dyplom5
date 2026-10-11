@@ -19,7 +19,7 @@ class DemandDerived {
     }
 
     // Per-movement base saturation from the regulations (turn class +
-    // opposing flow), before any override — what an override replaces.
+    // opposing flow), before any override
     [[nodiscard]] const SlotArray<MovementTag, Saturation>& baseSaturations()
         const {
         return baseSaturations_;
@@ -40,5 +40,3 @@ class DemandDerived {
     SlotArray<MovementTag, FlowRatio> flowRatios_;
     SlotArray<MovementTag, Saturation> baseSaturations_;
 };
-
-

@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <numeric>
 #include <vector>
-#include <iterator>
 
 #include "types.hpp"
 
@@ -27,7 +26,7 @@ void bronKerbosch(std::vector<GId>& R, std::vector<GId> P, std::vector<GId> X,
         return;
     }
 
-    // 1. Pivot Selection: maximize |N(pivot) ∩ P| over (P ∪ X)
+    // 1. Pivot Selection
     auto maxNeighborComp = [&](GId a, GId b) {
         return countNeighborsInP(cfg, a, P) < countNeighborsInP(cfg, b, P);
     };
@@ -42,7 +41,7 @@ void bronKerbosch(std::vector<GId>& R, std::vector<GId> P, std::vector<GId> X,
         }
     }
 
-    // 2. Filter Candidates: Loop over v ∈ P \ N(pivot)
+    // 2. Filter Candidates
     std::vector<GId> candidates;
     std::ranges::copy_if(P, std::back_inserter(candidates), [&](GId v) {
         return pivot == -1 || !isNeighbor(cfg, pivot, v);
@@ -52,7 +51,6 @@ void bronKerbosch(std::vector<GId>& R, std::vector<GId> P, std::vector<GId> X,
     for (GId v : candidates) {
         std::vector<GId> nextP, nextX;
 
-        // Form nextP = P ∩ N(v) and nextX = X ∩ N(v)
         std::ranges::copy_if(P, std::back_inserter(nextP),
                              [&](GId u) { return isNeighbor(cfg, v, u); });
         std::ranges::copy_if(X, std::back_inserter(nextX),

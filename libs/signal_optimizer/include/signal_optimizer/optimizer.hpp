@@ -48,8 +48,9 @@ enum class OptimizeError : uint8_t {
     InternalFailure,
 };
 
-// Runs the full optimization pipeline for a single intersection node.
-// Failures are reported explicitly; no partial result is returned.
+// Runs the full optimization pipeline for a single intersection node with
+// defined crosswalk, movement geometry. Returns signal group classification
+// (protected/permitted) and a signal plan to minimize total delay.
 std::expected<OptimizeResult, OptimizeError> optimize(
     NodeId node, const Graph& graph, const Demand& demand, int cycleLength,
     std::function<bool()> cancelled = {},

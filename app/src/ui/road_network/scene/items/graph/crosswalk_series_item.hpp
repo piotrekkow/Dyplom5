@@ -19,6 +19,6 @@ class CrosswalkSeriesItem : public QGraphicsItem {
    private:
     CrosswalkSeriesId id_;
     QPainterPath path_;      // pedestrian path, painted
-    QPainterPath hitShape_;  // stroked outline, generous for picking
+    QPainterPath hitShape_;  // stroked outline, for picking
     QRectF bounds_;
 };

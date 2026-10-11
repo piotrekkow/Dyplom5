@@ -66,8 +66,8 @@ std::vector<GStage> greedyCover(const std::vector<GStage>& validStages,
         }
 
         if (bestIdx < 0 || bestNew == 0) {
-            // Cannot cover remaining required groups — add any stage with
-            // covered groups (shouldn't normally happen)
+            // Cannot cover remaining required groups (shouldn't normally
+            // happen)
             assert(false);
             break;
         }

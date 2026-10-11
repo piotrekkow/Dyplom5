@@ -30,8 +30,6 @@ class Regulations {
     [[nodiscard]] double opposingFlowShare(TurnKind turn,
                                            size_t laneCount) const;
     [[nodiscard]] double approachReactionMargin() const;
-    // When true, the transition solver actively delays a leading vehicle group
-    // so a permitted crosswalk still meets its approach deadline.
     [[nodiscard]] bool enforceApproachRelease() const;
 
    private:

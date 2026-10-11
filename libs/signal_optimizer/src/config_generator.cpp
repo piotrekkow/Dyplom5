@@ -125,7 +125,7 @@ std::vector<std::vector<GGroup>> entryGroupLayouts(int entryIdx,
         return pGroups;
     };
 
-    // A group may only run permitted if that yields finite flow ratios —
+    // A group may only run permitted if that yields finite flow ratios.
     // S.perm == 0 marks streams that must not run on a permitted signal.
     auto permFeasible = [&](const std::vector<int>& clusterIdxs) {
         return std::isfinite(maxYAt(entry, clusterIdxs, true));
@@ -243,10 +243,7 @@ std::vector<GConfig> generateConfigs(const GInput& inp) {
                 int maxIgApEv =
                     maxIntergreen(inp, cfgGr[static_cast<std::size_t>(ap_i)],
                                   cfgGr[static_cast<std::size_t>(ev_i)]);
-                // Stored clamped to >=0: control::computeTransitionWeighted
-                // treats a missing/zero entry as "no extra clearance beyond
-                // the groups' own aspect-transition timing", which is exactly
-                // what the -1 "compatible" sentinel means here.
+                // Stored clamped to >=0, <0 means compatible
                 cfg.intergreen.set(ev_i, ap_i, std::max(maxIgEvAp, 0),
                                    std::max(maxIgApEv, 0));
                 if (maxIgEvAp < 0 && maxIgApEv < 0) {

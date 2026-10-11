@@ -9,8 +9,7 @@
 
 namespace control {
 
-// Implemented in timing_math.cpp; collapses a group's full aspect-interval
-// sequence down to its non-intergreen (go) windows.
+// timing_math.cpp
 std::vector<Window> activeWindows(const std::vector<AspectInterval>& sequence);
 
 template <ComparableKey GroupKey>

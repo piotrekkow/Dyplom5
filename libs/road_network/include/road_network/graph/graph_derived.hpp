@@ -29,9 +29,6 @@ class GraphDerived {
         return streamPermitted_;
     }
 
-    // Per-stream approach deadlines: A[evac][appr] = seconds the approaching
-    // stream needs to reach the point it shares with evac (-1 when they never
-    // meet or appr is a crosswalk). Feeds signal-level approach caps.
     [[nodiscard]] const SlotArray<NodeTag, StreamMatrix<int>>& streamApproach()
         const {
         return streamApproach_;

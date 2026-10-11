@@ -77,7 +77,7 @@ class Transaction {
             try {
                 undo();
             } catch (...) {
-                assert(false && "UndoFn threw — graph state may be corrupt");
+                assert(false && "UndoFn threw: graph state may be corrupt");
             }
         }
         for (auto& [_, s] : solves_) s.rederive();

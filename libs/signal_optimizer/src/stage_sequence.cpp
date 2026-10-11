@@ -21,8 +21,8 @@ std::unordered_map<GId, control::GroupParams> buildGroupParams(
     std::unordered_map<GId, control::GroupParams> params;
     for (const auto& g : cfg.groups) {
         const auto& a = regulations.aspects(kindOf(g.kind));
-        // .from is read for groups newly active in the "to" stage; .to is read
-        // for groups evacuating the "from" stage
+        // .from: groups going from inactive to active, .to: groups going from
+        // active to inactive
         params[g.id] = control::GroupParams{
             .minActiveTime = std::max(g.tMin, a.minGreen.fixed),
             .from = {.aspect = a.toActive.aspect,
@@ -36,9 +36,8 @@ std::unordered_map<GId, control::GroupParams> buildGroupParams(
     return params;
 }
 
-// Builds a dense control::Stage over every group in cfg (not just the active
-// ones): control::computeTransitionWeighted needs every group present to
-// classify from-only / to-only / both-active / neither across a transition.
+// Builds control::Stage over every group in cfg (not just the active
+// ones)
 control::Stage<GId> buildStage(const GStage& stage, const GConfig& cfg,
                                const Regulations& regulations) {
     std::unordered_set<GId> active(stage.groupIds.begin(),
@@ -71,7 +70,6 @@ std::vector<SequenceCandidate> enumerateSequences(
 
     std::vector<SequenceCandidate> result;
 
-    // Fix stage at index 0, permute the rest
     std::vector<int> perm(static_cast<std::size_t>(k - 1));
     std::ranges::iota(perm, 1);
 

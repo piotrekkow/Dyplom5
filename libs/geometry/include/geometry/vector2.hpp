@@ -19,8 +19,7 @@ struct Vector2 {
         return dx * v.dy - dy * v.dx;
     }
     // Returns signed angle from this → v (positive = CCW in y-up / math
-    // coords). In y-down screen coords right turns are positive — negate if
-    // needed.
+    // coords).
     [[nodiscard]] double angleTo(Vector2 v) const noexcept;
     // perpendicular counter clockwise
     [[nodiscard]] Vector2 perpCcw() const noexcept {

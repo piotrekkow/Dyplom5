@@ -243,9 +243,6 @@ signal_optimizer::OptimizeResult compileResult(const GConfig& bestCfg,
     signal_optimizer::OptimizeResult out;
     out.cycleLength = cycleLength;
 
-    // bestCfg.groups is ordered [movement groups][crosswalk groups] (see
-    // config_generator.cpp), so gid already indexes the concatenation of
-    // mgResults then cgResults below — no separate remapping needed.
     for (const auto& g : bestCfg.groups) {
         if (g.kind == GKind::Crosswalk) {
             const auto& series =
@@ -271,8 +268,6 @@ signal_optimizer::OptimizeResult compileResult(const GConfig& bestCfg,
         }
     }
 
-    // GId (int) group keys already match the mgResults++cgResults
-    // concatenation order above, so the steps carry over as-is.
     out.stages = best.steps;
 
     return out;

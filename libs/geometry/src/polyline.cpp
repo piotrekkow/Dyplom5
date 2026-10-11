@@ -13,14 +13,11 @@ bool isQuadFlat(Position p1, Position p2, Position c, double tolerance) {
     double dx = p2.x - p1.x;
     double dy = p2.y - p1.y;
 
-    // Cross product to find distance from point 'c' to line 'p1-p2'
     double ux = c.x - p1.x;
     double uy = c.y - p1.y;
     double area = ux * dy - uy * dx;
 
-    // Squared distance from c to line p1-p2
     double distSq = (area * area) / (dx * dx + dy * dy);
-
     return distSq <= (tolerance * tolerance);
 }
 
@@ -106,7 +103,7 @@ bool segmentIntersectionProper(Position a1, Position a2, Position b1,
     Vector2 qp = b1 - a1;
 
     if (std::abs(rxs) < geometryEpsilon)
-        return false;  // parallel or collinear — skip
+        return false;  // parallel or collinear: skip
 
     double t = (qp.dx * s.dy - qp.dy * s.dx) / rxs;
     double u = (qp.dx * r.dy - qp.dy * r.dx) / rxs;

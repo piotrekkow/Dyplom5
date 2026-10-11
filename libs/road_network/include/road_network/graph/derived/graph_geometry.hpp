@@ -30,7 +30,7 @@ std::optional<MovementAnchors> movementAnchors(const GraphData& data,
 
 std::vector<Polyline> movementPolylines(const GraphData& data, MovementId id);
 
-// For a candidate spec instead of the stored one — for ui drag previews
+// get computed instead of the stored one for ui drag previews
 std::vector<Polyline> movementPolylines(const GraphData& data, MovementId id,
                                         const MovementPathSpec& spec);
 }  // namespace graph_geometry

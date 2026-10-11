@@ -142,12 +142,7 @@ std::vector<Polyline> movementPolylines(const GraphData& data, MovementId id,
     Position xMid = anchors->xMid;
 
     // Curve math anchors to the entry line (withStopOffset=false), so the knee
-    // sits at eMid + eDir*dE regardless of the stop offset — matching
-    // movementAnchors, which builds eMid the same way. The drawn path still
-    // originates at the stop line: eStartPositions supplies that origin, and
-    // because the stop line, entry line and knee are colinear along the heading
-    // (eStart = ePos + eDir*stopLineOffset), the lead-in stop line → knee is a
-    // single straight segment.
+    // sits at eMid + eDir*dE regardless of the stop offset
     auto ePositions =
         lanePositions(data, mov->from(), /*withStopOffset=*/false);
     auto eStartPositions =
@@ -270,7 +265,7 @@ std::vector<Polyline> movementPolylines(const GraphData& data, MovementId id,
 
     xi = 0;
     // ei - entry iterator (global lane index; splitPerLane is
-    // section-relative, sized laneCount — see setMovementSplitPerLane)
+    // section-relative, sized laneCount)
     for (size_t ei = eFront; ei < eBack; ++ei) {
         int splitCount = splitPerLane.at(ei - eFront);
         Position ePos = ePositions.at(ei);

@@ -139,7 +139,7 @@ std::vector<Saturation> entryLaneSaturations(const GraphData& graph,
                 // Exclusive lanes: $$Q_{mj}^{(ex)} = Y \cdot S_m$$
                 if (laneMovements[i].size() == 1) qmj[i][mId] = y_lg * mm.Sm;
 
-                // Shared lane — movement spanning most lanes (e.g. T in `T T
+                // Shared lane: movement spanning most lanes (e.g. T in `T T
                 // TR`):
                 // $$Q_{mj} = Q_m - \sum_{ex} Q_{mj}^{(ex)}$$
                 if (laneMovements[i].size() > 1 && mm.qm == 1) {
@@ -147,7 +147,7 @@ std::vector<Saturation> entryLaneSaturations(const GraphData& graph,
                     qmj[i][mId] = Qm - mm.pm * y_lg * mm.Sm;
                 }
 
-                // Shared lane — when two shared lanes present (e.g. T in `LT
+                // Shared lane: when two shared lanes present (e.g. T in `LT
                 // T TR`):
                 // $$Q_{mj} = S_m \cdot \left(Y -
                 // \frac{Q_{mj,other}}{S_{m,other}}\right)$$
@@ -176,8 +176,7 @@ std::vector<Saturation> entryLaneSaturations(const GraphData& graph,
         return total;
     };
 
-    // Normalize per-lane flows so they sum to Qm — divergence can accumulate
-    // from the iterative recalc.
+    // Normalize per-lane flows so they sum to Qm
     auto ensureNoLostFlow = [&](FlowMap& qmj, const Cluster* cl) {
         for (auto mId : cl->movements()) {
             if (meta[mId].qm == 0) continue;
@@ -266,9 +265,6 @@ FlowRatio flowRatio(const GraphData& graph, const Demand& demand,
         movSat += saturations->at(i);
     }
 
-    // A zero adjusted saturation (the all-flows-zero degenerate state, or a
-    // fully blocked permitted regime) has no meaningful ratio: leave the side
-    // absent rather than dividing to inf/NaN.
     const double q = flow->eqVehiclesPerHour();
     FlowRatio out;
     if (movSat.prot > 0.0) out.prot = q / movSat.prot;

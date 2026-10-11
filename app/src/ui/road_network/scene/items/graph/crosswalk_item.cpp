@@ -8,11 +8,10 @@
 
 namespace {
 const QColor kBase{225, 225, 225, 150};
-// Road-marking rhythm: 0.5 m of paint, 0.5 m gap
 constexpr qreal kMarkLength = 0.5;
 constexpr qreal kMarkPeriod = 2 * kMarkLength;
 constexpr qreal kEdgeWidth = kMarkLength;
-constexpr qreal kHitMargin = 0.5;  // meters around the edge line
+constexpr qreal kHitMargin = 0.5;
 }  // namespace
 
 CrosswalkItem::CrosswalkItem(CrosswalkId id) : id_(id) {

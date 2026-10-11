@@ -13,7 +13,7 @@ inline constexpr double kEpsilon = 1e-6;
 // green allocation.
 struct StreamDelay {
     double greenRatio = 0;  // λ = g+1/T         [-]
-    double capacity = 0;    // c = S * λ           [veh/h]
+    double capacity = 0;    // c = S * λ         [veh/h]
     double saturation = 0;  // x = Q/c           [-]
     double delay = 0;       // d = d1 + d2       [s/veh];
 };
@@ -68,8 +68,7 @@ struct StreamDelay {
     return streamDelay(flow, saturationFlow, effectiveGreen, cycle).delay;
 }
 
-// Demand-weighted delay [veh * s/h] = d * Q — the optimizer's minimization
-// goal.
+// Demand-weighted delay [veh * s/h] = d * Q
 [[nodiscard]] inline double weightedDelay(double flow, double saturationFlow,
                                           double effectiveGreen, double cycle) {
     if (flow <= 0.0) return 0.0;

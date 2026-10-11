@@ -103,7 +103,7 @@ const char* aspectSymbol(SignalAspect aspect) {
         case SignalAspect::GREEN:
             return "\033[32m□\033[0m";
         case SignalAspect::YELLOW:
-            return "\033[93m◪\033[0m";
+            return "\033[38;2;255;255;0m◪\033[0m";
         case SignalAspect::FLASHING_GREEN:
             return "\033[38;5;82m◫\033[0m";
         default:

@@ -8,8 +8,7 @@
 #include "types.hpp"
 
 namespace {
-// Sum of the non-intergreen (slack green) duration a group is granted
-// during a transition — e.g. a both-active group's full makespan
+// Sum of the non-intergreen (slack green)
 int bonusGreen(const control::AspectTransition& tr) {
     int green = 0;
     for (const auto& iv : tr.intervals)
